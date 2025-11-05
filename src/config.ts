@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import yargs from 'yargs/yargs';
 import { hideBin } from 'yargs/helpers';
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 export interface DMConfig {
   username: string;

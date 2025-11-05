@@ -6,22 +6,25 @@ import { getConfig } from '../config.js';
 import { withDmConnection } from '../utils/db.js';
 import { normalizeIdentifier, ValidationError } from '../utils/validation.js';
 
-const listTablesSchema = z.object({
+const listTablesInputSchema = {
   schema: z
     .string()
     .optional()
     .describe('数据库 Schema，默认为配置中的 DM_SCHEMA'),
-});
+};
+
+const listTablesSchema = z.object(listTablesInputSchema);
+type ListTablesParams = z.infer<typeof listTablesSchema>;
 
 export function registerListTablesTool(server: McpServer): void {
-  server.tool(
+  server.registerTool(
     'list_tables',
     {
       title: '列出数据库中的所有表',
       description: '返回指定 Schema 下的所有表名',
-      inputSchema: listTablesSchema,
+      inputSchema: listTablesInputSchema,
     },
-    async ({ schema }) => {
+    async ({ schema }: ListTablesParams) => {
       const effectiveSchema = schema ?? getConfig().schema;
       try {
         const normalizedSchema = normalizeIdentifier(effectiveSchema);
