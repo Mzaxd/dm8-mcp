@@ -17,6 +17,7 @@ const DEFAULT_PORT = '5236';
 const runtimeOverrides: Partial<DMConfig> = {};
 
 const argv = yargs(hideBin(process.argv))
+  .version(false)
   .option('username', { type: 'string', describe: '数据库用户名' })
   .option('password', { type: 'string', describe: '数据库密码' })
   .option('host', { type: 'string', describe: '数据库主机' })
