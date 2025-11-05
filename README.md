@@ -19,7 +19,7 @@
 - 默认使用 stdio 传输，可与任意 MCP 客户端对接。
 
 ## 环境要求
-- Node.js >= 16（建议 18+）。
+- Node.js >= 16（推荐 16.x；若使用 18.x 需追加 `--openssl-legacy-provider`，原因是 Node 18 内置的 OpenSSL 3 默认禁用旧算法，而达梦官方 `dmdb` 驱动仍依赖 legacy provider）。
 - npm >= 9 或兼容包管理器。
 - 达梦 DM8 数据库实例及具备权限的账号。
 - 达梦 Node 原生驱动依赖（`dmdb` 已在 `package.json` 中声明，必要时按官方文档安装系统库）。
@@ -68,6 +68,13 @@ DM_SCHEMA=SYSDBA
 ```bash
 node dist/index.js --version
 ```
+
+## 快速启动
+在 `node` 版本选择上，请注意：使用 Node.js 16.x 时可以直接启动；若使用 Node.js 18.x，则必须通过命令行参数显式追加 `--openssl-legacy-provider` 以启用被默认禁用的旧 OpenSSL 算法，否则启动会失败。
+
+- **npm 脚本**：仓库内已提供 `npm run start:dm8`，会自动为当前进程注入 `NODE_OPTIONS=--openssl-legacy-provider`。Windows 环境若需兼容，可改用 `cross-env NODE_OPTIONS=--openssl-legacy-provider node dist/index.js`。
+- **Shell 启动器**：执行 `./start-dm8.sh --host 127.0.0.1 --port 5236 --username SYSDBA --password 密码 --schema SYSDBA`，脚本会自动附加 legacy provider 并将参数透传给 `dist/index.js`。
+- **Direnv 环境变量**：仓库根目录提供 `.envrc`，如果你使用 [direnv](https://direnv.net/)，在项目目录执行一次 `direnv allow`，进入目录时会自动设置 `NODE_OPTIONS=--openssl-legacy-provider`。若不需要该行为，可删除或忽略 `.envrc`。
 
 ## 在 MCP 客户端中注册
 ### Claude Desktop

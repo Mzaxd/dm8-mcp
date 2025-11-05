@@ -6,23 +6,26 @@ import { getConfig } from '../config.js';
 import { withDmConnection } from '../utils/db.js';
 import { normalizeIdentifier, ValidationError } from '../utils/validation.js';
 
-const describeTableSchema = z.object({
+const describeTableInputSchema = {
   schema: z
     .string()
     .optional()
     .describe('数据库 Schema，默认为配置中的 DM_SCHEMA'),
   table: z.string().min(1, '表名称不能为空').describe('表名称'),
-});
+};
+
+const describeTableSchema = z.object(describeTableInputSchema);
+type DescribeTableParams = z.infer<typeof describeTableSchema>;
 
 export function registerDescribeTableTool(server: McpServer): void {
-  server.tool(
+  server.registerTool(
     'describe_table',
     {
       title: '显示表结构',
       description: '返回列名、类型、长度以及是否可空信息',
-      inputSchema: describeTableSchema,
+      inputSchema: describeTableInputSchema,
     },
-    async ({ schema, table }) => {
+    async ({ schema, table }: DescribeTableParams) => {
       const effectiveSchema = schema ?? getConfig().schema;
       try {
         const normalizedSchema = normalizeIdentifier(effectiveSchema);

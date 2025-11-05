@@ -6,23 +6,26 @@ import { getConfig } from '../config.js';
 import { ensureSchema, withDmConnection } from '../utils/db.js';
 import { assertReadOnlyQuery, normalizeIdentifier, ValidationError } from '../utils/validation.js';
 
-const executeQuerySchema = z.object({
+const executeQueryInputSchema = {
   query: z.string().min(1, 'query 不能为空').describe('只读 SQL 语句'),
   schema: z
     .string()
     .optional()
     .describe('数据库 Schema，默认为配置中的 DM_SCHEMA'),
-});
+};
+
+const executeQuerySchema = z.object(executeQueryInputSchema);
+type ExecuteQueryParams = z.infer<typeof executeQuerySchema>;
 
 export function registerExecuteQueryTool(server: McpServer): void {
-  server.tool(
+  server.registerTool(
     'execute_query',
     {
       title: '执行只读 SQL',
       description: '仅允许 SELECT/SHOW/DESCRIBE/EXPLAIN 语句',
-      inputSchema: executeQuerySchema,
+      inputSchema: executeQueryInputSchema,
     },
-    async ({ query, schema }) => {
+    async ({ query, schema }: ExecuteQueryParams) => {
       const effectiveSchema = schema ?? getConfig().schema;
       try {
         assertReadOnlyQuery(query);
