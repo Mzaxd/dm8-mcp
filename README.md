@@ -38,6 +38,12 @@ DM_HOST=127.0.0.1 DM_PORT=5236 DM_USERNAME=SYSDBA DM_PASSWORD=密码 DM_SCHEMA=S
   node dist/index.js
 ```
 
+也可以直接使用 npx 调用已经构建好的 CLI（等价于 `node dist/index.js`，更方便在 Codex 或其他 MCP 调度器中引用）：
+```bash
+npx mcp-dm8 --host 127.0.0.1 --port 5236 --username SYSDBA --password 密码 --schema SYSDBA
+```
+> 注意：首次执行前需要先运行 `npm run build` 生成 `dist/cli.js`。
+
 ## 配置方式
 支持命令行参数、`setConfig` 运行时注入、环境变量/`.env`。优先级：CLI > 运行时 > 环境变量。
 
