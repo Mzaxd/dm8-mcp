@@ -1,6 +1,6 @@
 {
   "name": "mcp-dm8-server",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -11,12 +11,17 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "dm8-mcp": "NODE_OPTIONS=--openssl-legacy-provider node dist/index.js",
-    "test": "vitest"
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "test:coverage": "vitest --coverage",
+    "security-audit": "npm audit && npm run test",
+    "lint": "eslint src/**/*.ts",
+    "format": "prettier --write src/**/*.ts"
   },
-  "keywords": [],
+  "keywords": ["mcp", "dm8", "dameng", "database", "mcp-server", "security"],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "MCP server for DM8 database operations with enhanced security",
   "engines": {
     "node": ">=16"
   },
@@ -26,10 +31,17 @@
     "dotenv": "^17.2.3",
     "yargs": "^17.7.2",
     "yargs-parser": "^21.1.1",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.2.2"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "eslint": "^9.0.0",
+    "prettier": "^3.3.0",
     "ts-node": "^10.9.2",
     "tsup": "^8.5.0",
     "tsx": "^4.20.6",

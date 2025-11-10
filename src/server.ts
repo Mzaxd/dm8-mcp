@@ -17,20 +17,26 @@ export function createServer(): McpServer {
 
 export async function startServer(): Promise<void> {
   const config = getConfig();
-  const requiredConfig: Array<[keyof DMConfig, string]> = [
-    ['username', 'DM_USERNAME'],
-    ['password', 'DM_PASSWORD'],
-    ['host', 'DM_HOST'],
-    ['schema', 'DM_SCHEMA'],
+  
+  // 只在真正缺失配置时显示警告（通过 CLI 参数传递的不算缺失）
+  const requiredConfig: Array<keyof DMConfig> = [
+    'username',
+    'password',
+    'host',
+    'schema',
   ];
-  const missingKeys = requiredConfig.filter(([key]) => !config[key]);
+  const missingKeys = requiredConfig.filter((key) => !config[key]);
 
   if (missingKeys.length > 0) {
-    const readableKeys = missingKeys.map(([, env]) => env).join('、');
+    // 友好提示：可以通过 CLI 参数或环境变量配置
     console.warn(
-      `缺少数据库配置 ${readableKeys}，服务器仍会启动，但相关工具可能因配置缺失而失败`
+      `[DM8 MCP] 缺少数据库配置: ${missingKeys.join(', ')}`
+    );
+    console.warn(
+      `[DM8 MCP] 提示: 可通过 CLI 参数传递，如: --username SYSDBA --password xxx --host localhost --schema SYSDBA`
     );
   }
+  
   const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
