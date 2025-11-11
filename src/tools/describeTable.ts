@@ -60,6 +60,7 @@ export function registerDescribeTableTool(server: McpServer): void {
         const lines = rows.map((row) =>
           `${row.COLUMN_NAME} ${row.DATA_TYPE}(${row.DATA_LENGTH}) ${row.NULLABLE}`
         );
+        const columns = ['COLUMN_NAME', 'DATA_TYPE', 'DATA_LENGTH', 'NULLABLE'];
         return {
           content: [
             {
@@ -67,7 +68,10 @@ export function registerDescribeTableTool(server: McpServer): void {
               text: lines.join('\n'),
             },
           ],
-          structuredContent: rows,
+          structuredContent: {
+            columns,
+            rows,
+          },
         };
       } catch (error) {
         const message =
