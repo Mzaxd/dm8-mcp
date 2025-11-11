@@ -1,16 +1,22 @@
 {
   "name": "mcp-dm8-server",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
     "mcp-dm8": "dist/cli.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsup src/index.ts src/cli.ts --format esm --dts --out-dir dist",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "dm8-mcp": "NODE_OPTIONS=--openssl-legacy-provider node dist/index.js",
+    "prepublishOnly": "npm run build && npm run test",
     "test": "vitest",
     "test:watch": "vitest --watch",
     "test:coverage": "vitest --coverage",
@@ -18,10 +24,19 @@
     "lint": "eslint src/**/*.ts",
     "format": "prettier --write src/**/*.ts"
   },
-  "keywords": ["mcp", "dm8", "dameng", "database", "mcp-server", "security"],
+  "keywords": [
+    "mcp",
+    "dm8",
+    "dameng",
+    "database",
+    "mcp-server",
+    "security",
+    "cli",
+    "model-context-protocol"
+  ],
   "author": "",
   "license": "ISC",
-  "description": "MCP server for DM8 database operations with enhanced security",
+  "description": "MCP server for DM8 database operations with enhanced security. Provides read-only database access via Model Context Protocol.",
   "engines": {
     "node": ">=16"
   },
@@ -29,11 +44,13 @@
     "@modelcontextprotocol/sdk": "^1.21.0",
     "dmdb": "^1.0.40189",
     "dotenv": "^17.2.3",
+    "https-proxy-agent": "^7.0.6",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.2.2",
+    "socks-proxy-agent": "^8.0.5",
     "yargs": "^17.7.2",
     "yargs-parser": "^21.1.1",
-    "zod": "^3.25.76",
-    "pino": "^9.5.0",
-    "pino-pretty": "^11.2.2"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
