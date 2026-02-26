@@ -11,12 +11,18 @@ export interface ProxyConfig {
   type: 'http' | 'https' | 'socks4' | 'socks5';
 }
 
+export interface SchemaConfig {
+  name: string;         // Schema 名
+  description?: string; // 备注说明
+}
+
 export interface DMConfig {
   username: string;
   password: string;
   host: string;
   port: string;
-  schema: string;
+  schema: string;  // 默认模式
+  schemas?: SchemaConfig[];  // 模式列表
   proxy?: ProxyConfig;
 }
 
@@ -31,6 +37,7 @@ const argv = yargs(hideBin(process.argv))
   .option('host', { type: 'string', describe: '数据库主机' })
   .option('port', { type: 'string', describe: '数据库端口', default: DEFAULT_PORT })
   .option('schema', { type: 'string', describe: '默认 Schema' })
+  .option('schemas', { type: 'string', describe: '模式列表配置 (JSON 格式)，如: [{"name":"ORDER_MODULE","description":"订单模块"}]' })
   .option('proxy-enabled', { type: 'boolean', describe: '启用代理连接' })
   .option('proxy-host', { type: 'string', describe: '代理服务器地址' })
   .option('proxy-port', { type: 'string', describe: '代理服务器端口' })
@@ -56,7 +63,6 @@ function resolveValue(key: keyof DMConfig, envKey: string): string {
 }
 
 export function getConfig(): DMConfig {
-  // Check proxy enabled from argv directly since it's not part of DMConfig interface
   const proxyEnabled = (argv['proxy-enabled'] as boolean | undefined) ?? (process.env.DM_DB_PROXY_ENABLED === 'true');
 
   const config: DMConfig = {
@@ -66,6 +72,16 @@ export function getConfig(): DMConfig {
     port: resolveValue('port', 'DM_PORT'),
     schema: resolveValue('schema', 'DM_SCHEMA'),
   };
+
+  // 解析 schemas 配置
+  const schemasValue = (argv.schemas as string | undefined) ?? process.env.DM_SCHEMAS;
+  if (schemasValue) {
+    try {
+      config.schemas = JSON.parse(schemasValue);
+    } catch {
+      console.warn('[DM8 MCP] schemas 配置解析失败，请确保是有效的 JSON 格式');
+    }
+  }
 
   if (proxyEnabled) {
     config.proxy = {
@@ -77,6 +93,14 @@ export function getConfig(): DMConfig {
   }
 
   return config;
+}
+
+/**
+ * 获取所有配置的模式信息
+ */
+export function getConfiguredSchemas(): SchemaConfig[] {
+  const config = getConfig();
+  return config.schemas ?? [{ name: config.schema }];
 }
 
 export function shouldShowVersion(): boolean {

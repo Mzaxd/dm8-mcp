@@ -10,7 +10,7 @@ const listTablesInputSchema = {
   schema: z
     .string()
     .optional()
-    .describe('数据库 Schema，默认为配置中的 DM_SCHEMA'),
+    .describe('数据库 Schema，默认为配置中的默认 Schema'),
 };
 
 const listTablesSchema = z.object(listTablesInputSchema);
@@ -28,7 +28,7 @@ export function registerListTablesTool(server: McpServer): void {
       const effectiveSchema = schema ?? getConfig().schema;
       try {
         const normalizedSchema = normalizeIdentifier(effectiveSchema);
-        const rows = await withDmConnection(async (connection) => {
+        const rows = await withDmConnection(normalizedSchema, async (connection) => {
           const sql = `SELECT TABLE_NAME FROM ALL_TABLES WHERE OWNER = :owner ORDER BY TABLE_NAME`;
           const result = await connection.execute<{ TABLE_NAME: string }>(sql, {
             owner: normalizedSchema,

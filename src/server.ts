@@ -4,6 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import pkg from '../package.json' with { type: 'json' };
 import type { DMConfig } from './config.js';
 import { getConfig } from './config.js';
+import { closeAllConnections } from './utils/db.js';
 import { registerTools } from './tools/index.js';
 
 export function createServer(): McpServer {
@@ -15,9 +16,29 @@ export function createServer(): McpServer {
   return server;
 }
 
+/**
+ * 优雅关闭处理
+ */
+function setupGracefulShutdown(): void {
+  const shutdown = async () => {
+    try {
+      await closeAllConnections();
+    } catch {
+      // 忽略关闭错误
+    }
+    process.exit(0);
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
 export async function startServer(): Promise<void> {
   const config = getConfig();
-  
+
+  // 设置优雅关闭
+  setupGracefulShutdown();
+
   // 只在真正缺失配置时显示警告（通过 CLI 参数传递的不算缺失）
   const requiredConfig: Array<keyof DMConfig> = [
     'username',
@@ -36,7 +57,7 @@ export async function startServer(): Promise<void> {
       `[DM8 MCP] 提示: 可通过 CLI 参数传递，如: --username SYSDBA --password xxx --host localhost --schema SYSDBA`
     );
   }
-  
+
   const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);

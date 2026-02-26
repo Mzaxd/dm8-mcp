@@ -1,61 +1,45 @@
-import dmdb from 'dmdb';
 import type { Connection } from 'dmdb';
 
-import { getConfig } from '../config.js';
+import { connectionPool } from './connectionPool.js';
 import { normalizeIdentifier } from './validation.js';
-import { setProxyEnv, restoreProxyEnv, validateProxyConfig } from './proxy.js';
 
-dmdb.outFormat = dmdb.OUT_FORMAT_OBJECT;
+// 重新导出连接池相关功能
+export { connectionPool, type PoolStats } from './connectionPool.js';
 
-export async function createDmConnection(): Promise<Connection> {
-  const config = getConfig();
-  const { username, password, host, port, proxy } = config;
-
-  if (!username || !password || !host) {
-    throw new Error('缺少数据库连接配置，请设置 DM_USERNAME/DM_PASSWORD/DM_HOST');
-  }
-
-  // 验证代理配置（如果启用）
-  if (proxy && proxy.enabled) {
-    const proxyErrors = validateProxyConfig(proxy);
-    if (proxyErrors.length > 0) {
-      throw new Error(`代理配置错误: ${proxyErrors.join(', ')}`);
-    }
-
-    // 设置代理环境变量
-    setProxyEnv(proxy);
-  }
-
-  try {
-    const encodedUser = encodeURIComponent(username);
-    const encodedPassword = encodeURIComponent(password);
-    const connectString = `dm://${encodedUser}:${encodedPassword}@${host}:${port}`;
-
-    // 尝试连接数据库
-    const connection = await dmdb.getConnection(connectString);
-    return connection;
-  } finally {
-    // 无论连接成功或失败，都恢复原始环境变量
-    if (proxy && proxy.enabled) {
-      restoreProxyEnv();
-    }
-  }
+/**
+ * 使用连接池执行数据库操作
+ * @param schema - 目标模式名
+ * @param handler - 数据库操作处理器
+ * @returns 操作结果
+ */
+export async function withDmConnection<T>(
+  schema: string,
+  handler: (connection: Connection) => Promise<T>
+): Promise<T> {
+  const connection = await connectionPool.getOrCreateConnection(schema);
+  // 连接池管理的连接不需要手动关闭
+  return handler(connection);
 }
 
-export async function withDmConnection<T>(handler: (connection: Connection) => Promise<T>): Promise<T> {
-  const connection = await createDmConnection();
-  try {
-    return await handler(connection);
-  } finally {
-    try {
-      await connection.close();
-    } catch (error) {
-      // 安静地忽略关闭异常，避免覆盖业务错误。
-    }
-  }
+/**
+ * 关闭所有连接池中的连接
+ */
+export async function closeAllConnections(): Promise<void> {
+  await connectionPool.closeAll();
 }
 
+/**
+ * 获取连接池统计信息
+ */
+export function getPoolStats() {
+  return connectionPool.getStats();
+}
+
+/**
+ * 设置连接的 schema（用于连接池中的连接切换）
+ * @deprecated 连接池会自动设置 schema，通常不需要手动调用
+ */
 export async function ensureSchema(connection: Connection, schema: string): Promise<void> {
   const normalized = normalizeIdentifier(schema);
-  await connection.execute(`SET SCHEMA ${normalized}`);
+  await connection.execute(`SET SCHEMA "${normalized}"`);
 }
