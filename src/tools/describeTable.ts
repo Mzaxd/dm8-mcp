@@ -10,7 +10,7 @@ const describeTableInputSchema = {
   schema: z
     .string()
     .optional()
-    .describe('数据库 Schema，默认为配置中的 DM_SCHEMA'),
+    .describe('数据库 Schema，默认为配置中的默认 Schema'),
   table: z.string().min(1, '表名称不能为空').describe('表名称'),
 };
 
@@ -30,7 +30,7 @@ export function registerDescribeTableTool(server: McpServer): void {
       try {
         const normalizedSchema = normalizeIdentifier(effectiveSchema);
         const normalizedTable = normalizeIdentifier(table);
-        const rows = await withDmConnection(async (connection) => {
+        const rows = await withDmConnection(normalizedSchema, async (connection) => {
           const sql = `
             SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, NULLABLE
             FROM ALL_TAB_COLUMNS

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { getConfig } from '../config.js';
-import { ensureSchema, withDmConnection } from '../utils/db.js';
+import { withDmConnection } from '../utils/db.js';
 import { assertReadOnlyQuery, normalizeIdentifier, ValidationError } from '../utils/validation.js';
 
 const executeQueryInputSchema = {
@@ -22,7 +22,7 @@ export function registerExecuteQueryTool(server: McpServer): void {
     'execute_query',
     {
       title: '执行只读 SQL',
-      description: '仅允许 SELECT/SHOW/DESCRIBE/EXPLAIN 语句',
+      description: '仅允许 SELECT/SHOW/DESCRIBE/EXPLAIN 语句。schema 参数支持别名或实际模式名',
       inputSchema: executeQueryInputSchema,
     },
     async ({ query, schema }: ExecuteQueryParams) => {
@@ -30,8 +30,7 @@ export function registerExecuteQueryTool(server: McpServer): void {
       try {
         assertReadOnlyQuery(query);
         const normalizedSchema = normalizeIdentifier(effectiveSchema);
-        const result = await withDmConnection(async (connection) => {
-          await ensureSchema(connection, normalizedSchema);
+        const result = await withDmConnection(normalizedSchema, async (connection) => {
           return connection.execute<Record<string, unknown>>(query);
         });
 

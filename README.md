@@ -200,11 +200,101 @@ npx mcp-dm8-server --username SYSDBA --password 密码 --host your_dm_host --sch
 
 | 工具名 | 描述 | 参数 |
 |--------|------|------|
+| `list_schemas` | 列出可访问的数据库模式 | 无 |
 | `list_tables` | 列出指定 Schema 的所有表 | `schema` (可选) |
 | `describe_table` | 显示表结构信息 | `schema` (可选), `table` (必填) |
 | `execute_query` | 执行只读 SQL 查询 | `schema` (可选), `query` (必填) |
 
 > ⚠️ **安全限制**: 只允许执行 SELECT/SHOW/DESCRIBE/EXPLAIN 语句
+
+## 🗂️ 多模式支持
+
+支持在单个 MCP 实例中配置多个数据库模式，适用于分布式项目场景。
+
+### 配置方式
+
+#### CLI 参数配置
+
+```json
+{
+  "mcpServers": {
+    "dm8": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-dm8-server",
+        "--host", "127.0.0.1",
+        "--port", "5236",
+        "--username", "SYSDBA",
+        "--password", "your_password",
+        "--schema", "ORDER_MODULE",
+        "--schemas", "[{\"name\":\"ORDER_MODULE\",\"description\":\"订单模块\"},{\"name\":\"USER_MODULE\",\"description\":\"用户模块\"},{\"name\":\"PRODUCT_MODULE\",\"description\":\"商品模块\"}]"
+      ]
+    }
+  }
+}
+```
+
+#### 环境变量配置
+
+```json
+{
+  "mcpServers": {
+    "dm8": {
+      "command": "npx",
+      "args": ["-y", "mcp-dm8-server"],
+      "env": {
+        "DM_HOST": "127.0.0.1",
+        "DM_PORT": "5236",
+        "DM_USERNAME": "SYSDBA",
+        "DM_PASSWORD": "your_password",
+        "DM_SCHEMA": "ORDER_MODULE",
+        "DM_SCHEMAS": "[{\"name\":\"ORDER_MODULE\",\"description\":\"订单模块\"},{\"name\":\"USER_MODULE\",\"description\":\"用户模块\"}]"
+      }
+    }
+  }
+}
+```
+
+### Schema 配置格式
+
+```json
+[
+  {"name": "ORDER_MODULE", "description": "订单模块"},
+  {"name": "USER_MODULE", "description": "用户模块"},
+  {"name": "PRODUCT_MODULE", "description": "商品模块"}
+]
+```
+
+### 使用示例
+
+```
+# 查看所有配置的模式
+list_schemas()
+
+# 查询指定模式
+list_tables(schema: "ORDER_MODULE")
+describe_table(schema: "USER_MODULE", table: "t_user")
+execute_query(schema: "PRODUCT_MODULE", query: "SELECT * FROM products")
+
+# 使用默认模式（不传 schema 参数）
+list_tables()
+```
+
+### 输出示例
+
+`list_schemas()` 输出：
+```
+=== 已配置的模式 ===
+  ORDER_MODULE (默认) - 订单模块
+  USER_MODULE - 用户模块
+  PRODUCT_MODULE - 商品模块
+
+=== 数据库中的模式 ===
+  ORDER_MODULE (默认) - 订单模块
+  PRODUCT_MODULE - 商品模块
+  USER_MODULE - 用户模块
+```
 
 ## 📋 命令行参数
 
@@ -215,6 +305,7 @@ npx mcp-dm8-server --username SYSDBA --password 密码 --host your_dm_host --sch
 | `--username` | `DM_USERNAME` | ✅ | 无 | 数据库用户名 |
 | `--password` | `DM_PASSWORD` | ✅ | 无 | 数据库密码 |
 | `--schema` | `DM_SCHEMA` | ✅ | 无 | 默认数据库模式 |
+| `--schemas` | `DM_SCHEMAS` | ❌ | 无 | 模式列表配置 (JSON 格式) |
 | `--proxy-enabled` | `DM_DB_PROXY_ENABLED` | ❌ | false | 启用代理连接 |
 | `--proxy-host` | `DM_DB_PROXY_HOST` | ❌ | 无 | 代理服务器地址 |
 | `--proxy-port` | `DM_DB_PROXY_PORT` | ❌ | 无 | 代理服务器端口 |
