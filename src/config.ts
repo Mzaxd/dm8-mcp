@@ -1,19 +1,38 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import dotenv from 'dotenv';
 import yargs from 'yargs/yargs';
 import { hideBin } from 'yargs/helpers';
 
 dotenv.config({ quiet: true });
 
-export interface ProxyConfig {
-  enabled: boolean;
-  host: string;
-  port: string;
-  type: 'http' | 'https' | 'socks4' | 'socks5';
+export interface SchemaConfig {
+  name: string;
+  description?: string;
 }
 
-export interface SchemaConfig {
-  name: string;         // Schema 名
-  description?: string; // 备注说明
+export interface ConnectionConfig {
+  name: string;
+  host: string;
+  port: string;
+  username: string;
+  password: string;
+  schema: string;
+  schemas?: SchemaConfig[];
+  default?: boolean;
+  masterHost?: string;
+  masterPort?: string;
+}
+
+export interface EnvironmentConfig {
+  connections: ConnectionConfig[];
+  defaultConnection?: string;
+}
+
+export interface McpConfigFile {
+  activeEnv?: string;
+  environments: Record<string, EnvironmentConfig>;
 }
 
 export interface DMConfig {
@@ -21,12 +40,16 @@ export interface DMConfig {
   password: string;
   host: string;
   port: string;
-  schema: string;  // 默认模式
-  schemas?: SchemaConfig[];  // 模式列表
-  proxy?: ProxyConfig;
+  schema: string;
+  schemas?: SchemaConfig[];
+  connections?: ConnectionConfig[];
+  defaultConnection?: string;
+  configFile?: string;
+  env?: string;
 }
 
 const DEFAULT_PORT = '5236';
+const DEFAULT_CONNECTION_NAME = 'default';
 
 const runtimeOverrides: Partial<DMConfig> = {};
 
@@ -37,70 +60,439 @@ const argv = yargs(hideBin(process.argv))
   .option('host', { type: 'string', describe: '数据库主机' })
   .option('port', { type: 'string', describe: '数据库端口', default: DEFAULT_PORT })
   .option('schema', { type: 'string', describe: '默认 Schema' })
-  .option('schemas', { type: 'string', describe: '模式列表配置 (JSON 格式)，如: [{"name":"ORDER_MODULE","description":"订单模块"}]' })
-  .option('proxy-enabled', { type: 'boolean', describe: '启用代理连接' })
-  .option('proxy-host', { type: 'string', describe: '代理服务器地址' })
-  .option('proxy-port', { type: 'string', describe: '代理服务器端口' })
-  .option('proxy-type', { type: 'string', choices: ['http', 'https', 'socks4', 'socks5'], describe: '代理类型', default: 'http' })
+  .option('schemas', {
+    type: 'string',
+    describe: '模式列表，支持逗号分隔 (如: SYSDBA,GASBASE) 或 JSON 格式',
+  })
+  .option('connections', {
+    type: 'string',
+    describe: '多连接配置，必须为 JSON 数组',
+  })
+  .option('default-connection', {
+    type: 'string',
+    describe: '默认连接名，多连接模式下未显式传入 connection 时使用',
+  })
+  .option('config', {
+    type: 'string',
+    describe: '配置文件路径，默认查找 .claude/dm8-mcp.json',
+  })
+  .option('env', {
+    type: 'string',
+    describe: '激活的环境名（对应配置文件中的 environments 键）',
+  })
   .option('version', { type: 'boolean', describe: '打印版本信息' })
   .help()
   .wrap(Math.min(120, process.stdout.columns))
   .parseSync();
 
-export function setConfig(partial: Partial<DMConfig>): void {
-  Object.assign(runtimeOverrides, partial);
+function normalizeSchemaEntry(raw: unknown): SchemaConfig {
+  if (typeof raw === 'string') {
+    const name = raw.trim();
+    if (!name) {
+      throw new Error('schema 名称不能为空');
+    }
+    return { name };
+  }
+
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('schema 配置必须为字符串或对象');
+  }
+
+  const name = String((raw as { name?: unknown }).name ?? '').trim();
+  if (!name) {
+    throw new Error('schema.name 不能为空');
+  }
+
+  const descriptionValue = (raw as { description?: unknown }).description;
+  return descriptionValue == null
+    ? { name }
+    : { name, description: String(descriptionValue) };
 }
 
-const env = process.env;
+function parseSchemaConfigs(raw: unknown): SchemaConfig[] {
+  if (Array.isArray(raw)) {
+    return raw.map(normalizeSchemaEntry);
+  }
+
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return [];
+    }
+
+    try {
+      return parseSchemaConfigs(JSON.parse(trimmed));
+    } catch {
+      return trimmed
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .map((name) => ({ name }));
+    }
+  }
+
+  throw new Error('schemas 配置格式无效');
+}
+
+function normalizeConnectionConfig(raw: unknown): ConnectionConfig {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('connections 中的每一项必须为对象');
+  }
+
+  const value = raw as Record<string, unknown>;
+  const schemas =
+    value.schemas == null ? undefined : parseSchemaConfigs(value.schemas);
+
+  const schemaValue = String(value.schema ?? '').trim();
+  const effectiveSchema = schemaValue || schemas?.[0]?.name || '';
+
+  const masterHost = String(value.masterHost ?? '').trim() || undefined;
+  const masterPort = String(value.masterPort ?? '').trim() || undefined;
+
+  return {
+    name: String(value.name ?? '').trim(),
+    host: String(value.host ?? '').trim(),
+    port: String(value.port ?? DEFAULT_PORT).trim() || DEFAULT_PORT,
+    username: String(value.username ?? '').trim(),
+    password: String(value.password ?? ''),
+    schema: effectiveSchema,
+    schemas,
+    default:
+      typeof value.default === 'boolean'
+        ? value.default
+        : String(value.default ?? '').toLowerCase() === 'true',
+    ...(masterHost && { masterHost }),
+    ...(masterPort && { masterPort }),
+  };
+}
+
+function parseConnectionsValue(raw: unknown): ConnectionConfig[] | undefined {
+  if (raw == null) {
+    return undefined;
+  }
+
+  if (Array.isArray(raw)) {
+    return raw.map(normalizeConnectionConfig);
+  }
+
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed)) {
+      throw new Error('connections 配置必须为 JSON 数组');
+    }
+
+    return parsed.map(normalizeConnectionConfig);
+  }
+
+  throw new Error('connections 配置格式无效');
+}
 
 function resolveValue(key: keyof DMConfig, envKey: string): string {
   return (
     runtimeOverrides[key] ??
     (argv[key] as string | undefined) ??
-    env[envKey] ??
+    process.env[envKey] ??
     (key === 'port' ? DEFAULT_PORT : '')
   );
 }
 
-export function getConfig(): DMConfig {
-  const proxyEnabled = (argv['proxy-enabled'] as boolean | undefined) ?? (process.env.DM_DB_PROXY_ENABLED === 'true');
+function materializeConnection(
+  connection: ConnectionConfig,
+): ConnectionConfig {
+  const schemas =
+    connection.schemas && connection.schemas.length > 0
+      ? connection.schemas
+      : connection.schema
+        ? [{ name: connection.schema }]
+        : [];
 
+  const schema = connection.schema || schemas[0]?.name || '';
+
+  return {
+    ...connection,
+    port: connection.port || DEFAULT_PORT,
+    schema,
+    schemas,
+  };
+}
+
+export function setConfig(partial: Partial<DMConfig>): void {
+  Object.assign(runtimeOverrides, partial);
+}
+
+/**
+ * 解析配置文件路径，按优先级查找：--config > DM_CONFIG_FILE > .claude/dm8-mcp.json
+ */
+function resolveConfigFilePath(): string | undefined {
+  const runtimeConfig = runtimeOverrides.configFile as string | undefined;
+  if (runtimeConfig) {
+    return path.resolve(runtimeConfig);
+  }
+
+  const cliConfig = argv.config as string | undefined;
+  if (cliConfig) {
+    return path.resolve(cliConfig);
+  }
+
+  const envConfig = process.env.DM_CONFIG_FILE;
+  if (envConfig) {
+    return path.resolve(envConfig);
+  }
+
+  const defaultPath = path.resolve(process.cwd(), '.claude', 'dm8-mcp.json');
+  if (fs.existsSync(defaultPath)) {
+    return defaultPath;
+  }
+
+  return undefined;
+}
+
+let cachedConfigFile: McpConfigFile | null | undefined = undefined;
+
+/**
+ * 加载并解析配置文件，结果会被缓存
+ */
+function loadConfigFile(): McpConfigFile | null {
+  if (cachedConfigFile !== undefined) {
+    return cachedConfigFile;
+  }
+
+  const filePath = resolveConfigFilePath();
+  if (!filePath) {
+    cachedConfigFile = null;
+    return null;
+  }
+
+  try {
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const parsed = JSON.parse(raw) as McpConfigFile;
+
+    if (!parsed.environments || typeof parsed.environments !== 'object') {
+      console.error(`[DM8 MCP] 配置文件 ${filePath} 缺少 "environments" 字段`);
+      cachedConfigFile = null;
+      return null;
+    }
+
+    console.error(`[DM8 MCP] 已加载配置文件: ${filePath}`);
+    cachedConfigFile = parsed;
+    return parsed;
+  } catch (error) {
+    console.error(
+      `[DM8 MCP] 加载配置文件失败: ${error instanceof Error ? error.message : error}`
+    );
+    cachedConfigFile = null;
+    return null;
+  }
+}
+
+/**
+ * 重置配置文件缓存（测试用）
+ */
+export function resetConfigFileCache(): void {
+  cachedConfigFile = undefined;
+}
+
+/**
+ * 判断 CLI/env 是否提供了显式连接参数
+ */
+function hasExplicitConnectionParams(): boolean {
+  return !!(
+    runtimeOverrides.connections ??
+    (argv.connections as string | undefined) ??
+    process.env.DM_CONNECTIONS ??
+    runtimeOverrides.host ??
+    argv.host ??
+    process.env.DM_HOST
+  );
+}
+
+function resolveEnvName(): string | undefined {
+  return (
+    (runtimeOverrides.env as string | undefined) ??
+    (argv.env as string | undefined) ??
+    process.env.DM_ENV
+  );
+}
+
+/**
+ * 从配置文件中解析当前环境的连接配置
+ */
+function getConnectionsFromConfigFile(): ConnectionConfig[] | undefined {
+  const configFile = loadConfigFile();
+  if (!configFile) {
+    return undefined;
+  }
+
+  const envName = resolveEnvName() ?? configFile.activeEnv;
+  if (!envName) {
+    console.error('[DM8 MCP] 配置文件中未指定 activeEnv，也未通过 --env / DM_ENV 指定环境');
+    return undefined;
+  }
+
+  const envConfig = configFile.environments[envName];
+  if (!envConfig) {
+    console.error(`[DM8 MCP] 配置文件中未找到环境 "${envName}"`);
+    return undefined;
+  }
+
+  if (!envConfig.connections || !Array.isArray(envConfig.connections)) {
+    console.error(`[DM8 MCP] 环境 "${envName}" 缺少 connections 配置`);
+    return undefined;
+  }
+
+  console.error(`[DM8 MCP] 使用环境: ${envName} (${envConfig.connections.length} 个连接)`);
+
+  return envConfig.connections.map((raw) => normalizeConnectionConfig(raw));
+}
+
+function getDefaultConnectionFromConfigFile(): string | undefined {
+  const configFile = loadConfigFile();
+  if (!configFile) {
+    return undefined;
+  }
+
+  const envName = resolveEnvName() ?? configFile.activeEnv;
+  if (!envName) {
+    return undefined;
+  }
+
+  return configFile.environments[envName]?.defaultConnection;
+}
+
+export function getConfig(): DMConfig {
   const config: DMConfig = {
     username: resolveValue('username', 'DM_USERNAME'),
     password: resolveValue('password', 'DM_PASSWORD'),
     host: resolveValue('host', 'DM_HOST'),
     port: resolveValue('port', 'DM_PORT'),
     schema: resolveValue('schema', 'DM_SCHEMA'),
+    defaultConnection:
+      (runtimeOverrides.defaultConnection as string | undefined) ??
+      (argv['default-connection'] as string | undefined) ??
+      process.env.DM_DEFAULT_CONNECTION ??
+      getDefaultConnectionFromConfigFile(),
+    configFile: resolveConfigFilePath() ?? undefined,
+    env: resolveEnvName(),
   };
 
-  // 解析 schemas 配置
-  const schemasValue = (argv.schemas as string | undefined) ?? process.env.DM_SCHEMAS;
+  const schemasValue =
+    runtimeOverrides.schemas ??
+    (argv.schemas as string | undefined) ??
+    process.env.DM_SCHEMAS;
   if (schemasValue) {
-    try {
-      config.schemas = JSON.parse(schemasValue);
-    } catch {
-      console.warn('[DM8 MCP] schemas 配置解析失败，请确保是有效的 JSON 格式');
-    }
+    config.schemas = parseSchemaConfigs(schemasValue);
   }
 
-  if (proxyEnabled) {
-    config.proxy = {
-      enabled: proxyEnabled,
-      host: (argv['proxy-host'] as string | undefined) ?? process.env.DM_DB_PROXY_HOST ?? '',
-      port: (argv['proxy-port'] as string | undefined) ?? process.env.DM_DB_PROXY_PORT ?? '',
-      type: ((argv['proxy-type'] as string | undefined) ?? process.env.DM_DB_PROXY_TYPE ?? 'http') as ProxyConfig['type'],
-    };
+  // CLI/env 显式参数优先
+  if (hasExplicitConnectionParams()) {
+    const connectionsValue =
+      runtimeOverrides.connections ??
+      (argv.connections as string | undefined) ??
+      process.env.DM_CONNECTIONS;
+    if (connectionsValue) {
+      config.connections = parseConnectionsValue(connectionsValue);
+    }
+  } else {
+    // 从配置文件加载
+    const fileConnections = getConnectionsFromConfigFile();
+    if (fileConnections) {
+      config.connections = fileConnections;
+    }
   }
 
   return config;
 }
 
-/**
- * 获取所有配置的模式信息
- */
-export function getConfiguredSchemas(): SchemaConfig[] {
+export function getConfiguredConnections(): ConnectionConfig[] {
   const config = getConfig();
-  return config.schemas ?? [{ name: config.schema }];
+
+  if (config.connections && config.connections.length > 0) {
+    return config.connections.map((connection) =>
+      materializeConnection(connection)
+    );
+  }
+
+  if (!config.host && !config.username && !config.password && !config.schema) {
+    return [];
+  }
+
+  return [
+    materializeConnection(
+      {
+        name: config.defaultConnection || DEFAULT_CONNECTION_NAME,
+        host: config.host,
+        port: config.port,
+        username: config.username,
+        password: config.password,
+        schema: config.schema,
+        schemas: config.schemas,
+        default: true,
+      },
+    ),
+  ];
+}
+
+export function getConfiguredSchemas(): SchemaConfig[] {
+  const uniqueSchemas = new Map<string, SchemaConfig>();
+
+  for (const connection of getConfiguredConnections()) {
+    const schemas =
+      connection.schemas && connection.schemas.length > 0
+        ? connection.schemas
+        : connection.schema
+          ? [{ name: connection.schema }]
+          : [];
+
+    for (const schema of schemas) {
+      const key = schema.name.toUpperCase();
+      if (!uniqueSchemas.has(key)) {
+        uniqueSchemas.set(key, schema);
+      }
+    }
+  }
+
+  return Array.from(uniqueSchemas.values());
+}
+
+export function getConnectionByName(
+  connectionName: string
+): ConnectionConfig | undefined {
+  const normalized = connectionName.trim().toUpperCase();
+  return getConfiguredConnections().find(
+    (connection) => connection.name.toUpperCase() === normalized
+  );
+}
+
+export function getDefaultConnectionName(): string | undefined {
+  const config = getConfig();
+  const connections = getConfiguredConnections();
+
+  if (connections.length === 0) {
+    return undefined;
+  }
+
+  if (config.defaultConnection) {
+    return config.defaultConnection;
+  }
+
+  const flagged = connections.find((connection) => connection.default);
+  if (flagged) {
+    return flagged.name;
+  }
+
+  if (connections.length === 1) {
+    return connections[0].name;
+  }
+
+  const namedDefault = connections.find(
+    (connection) => connection.name.toUpperCase() === DEFAULT_CONNECTION_NAME.toUpperCase()
+  );
+  return namedDefault?.name;
 }
 
 export function shouldShowVersion(): boolean {

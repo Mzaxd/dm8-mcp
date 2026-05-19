@@ -120,6 +120,8 @@ config/local.ts
 # MCP configuration (might contain sensitive connection details)
 .mcp.json
 .mcp-config.json
+.claude/dm8-mcp.json
+.claude/dm8-mcp.local.json
 
 # Database connection files (might contain credentials)
 *.db-shm
@@ -127,3 +129,4 @@ config/local.ts
 database/local.db
 .claude
 CLAUDE.md
+.omc/
