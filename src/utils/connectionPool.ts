@@ -1,8 +1,7 @@
 import dmdb from 'dmdb';
 import type { Connection } from 'dmdb';
 
-import { getConfig } from '../config.js';
-import { setProxyEnv, restoreProxyEnv, validateProxyConfig } from './proxy.js';
+import { getConnectionByName } from '../config.js';
 
 dmdb.outFormat = dmdb.OUT_FORMAT_OBJECT;
 
@@ -24,89 +23,122 @@ class ConnectionPool {
   private lastAccess: Map<string, Date> = new Map();
   private isShuttingDown = false;
 
+  private buildConnectionKey(connectionName: string, schema: string): string {
+    return `${connectionName.toUpperCase()}::${schema.toUpperCase()}`;
+  }
+
   /**
-   * 获取或创建指定 schema 的连接
+   * 获取或创建指定连接与 schema 的连接
+   * @param connectionName - 连接名
    * @param schema - 目标模式名
    * @returns 数据库连接
    */
-  async getOrCreateConnection(schema: string): Promise<Connection> {
+  async getOrCreateConnection(
+    connectionName: string,
+    schema: string
+  ): Promise<Connection> {
     if (this.isShuttingDown) {
       throw new Error('连接池正在关闭，无法创建新连接');
     }
 
+    const connectionKey = this.buildConnectionKey(connectionName, schema);
+
     // 检查是否已有连接
-    const existingConn = this.connections.get(schema);
+    const existingConn = this.connections.get(connectionKey);
     if (existingConn) {
       // 验证连接是否仍然有效
       try {
         await existingConn.execute('SELECT 1 FROM DUAL');
-        this.lastAccess.set(schema, new Date());
+        this.lastAccess.set(connectionKey, new Date());
         return existingConn;
       } catch {
         // 连接已失效，移除并重新创建
-        this.connections.delete(schema);
-        this.lastAccess.delete(schema);
+        this.connections.delete(connectionKey);
+        this.lastAccess.delete(connectionKey);
       }
     }
 
     // 创建新连接
-    const connection = await this.createConnection(schema);
-    this.connections.set(schema, connection);
-    this.lastAccess.set(schema, new Date());
+    const connection = await this.createConnection(connectionName, schema);
+    this.connections.set(connectionKey, connection);
+    this.lastAccess.set(connectionKey, new Date());
     return connection;
   }
 
   /**
-   * 创建新的数据库连接
+   * 创建新的数据库连接，支持主从 fallback
    */
-  private async createConnection(schema: string): Promise<Connection> {
-    const config = getConfig();
-    const { username, password, host, port, proxy } = config;
+  private async createConnection(
+    connectionName: string,
+    schema: string
+  ): Promise<Connection> {
+    const config = getConnectionByName(connectionName);
+    if (!config) {
+      throw new Error(`未找到连接 "${connectionName}"`);
+    }
+
+    const { username, password, host, port, masterHost, masterPort } = config;
 
     if (!username || !password || !host) {
-      throw new Error('缺少数据库连接配置，请设置 DM_USERNAME/DM_PASSWORD/DM_HOST');
+      throw new Error(
+        `连接 "${connectionName}" 缺少数据库配置，请检查 host/username/password`
+      );
     }
 
-    // 验证代理配置
-    if (proxy && proxy.enabled) {
-      const proxyErrors = validateProxyConfig(proxy);
-      if (proxyErrors.length > 0) {
-        throw new Error(`代理配置错误: ${proxyErrors.join(', ')}`);
-      }
-      setProxyEnv(proxy);
-    }
+    const encodedUser = encodeURIComponent(username);
+    const encodedPassword = encodeURIComponent(password);
 
     try {
-      const encodedUser = encodeURIComponent(username);
-      const encodedPassword = encodeURIComponent(password);
-      const connectString = `dm://${encodedUser}:${encodedPassword}@${host}:${port}`;
-
-      const connection = await dmdb.getConnection(connectString);
-
-      // 设置 schema
-      await connection.execute(`SET SCHEMA "${schema}"`);
-
+      const connection = await this.buildConnection(
+        encodedUser, encodedPassword, host, port, schema
+      );
       return connection;
-    } finally {
-      if (proxy && proxy.enabled) {
-        restoreProxyEnv();
+    } catch (primaryError) {
+      if (masterHost) {
+        const effectiveMasterPort = masterPort || port;
+        console.error(
+          `[DM8 MCP] 连接 ${host}:${port} 失败，fallback 到主库 ${masterHost}:${effectiveMasterPort}`
+        );
+        try {
+          const connection = await this.buildConnection(
+            encodedUser, encodedPassword, masterHost, effectiveMasterPort, schema
+          );
+          return connection;
+        } catch {
+          // fallback 也失败，抛出原始错误
+        }
       }
+      throw primaryError;
     }
   }
 
+  private async buildConnection(
+    encodedUser: string,
+    encodedPassword: string,
+    host: string,
+    port: string,
+    schema: string
+  ): Promise<Connection> {
+    const connectString = `dm://${encodedUser}:${encodedPassword}@${host}:${port}`;
+    const connection = await dmdb.getConnection(connectString);
+    await connection.execute(`SET SCHEMA "${schema}"`);
+    return connection;
+  }
+
   /**
-   * 关闭指定 schema 的连接
+   * 关闭指定连接与 schema 的连接
    */
-  async closeConnection(schema: string): Promise<void> {
-    const connection = this.connections.get(schema);
+  async closeConnection(connectionName: string, schema: string): Promise<void> {
+    const connectionKey = this.buildConnectionKey(connectionName, schema);
+    const connection = this.connections.get(connectionKey);
     if (connection) {
       try {
         await connection.close();
       } catch {
         // 忽略关闭错误
       }
-      this.connections.delete(schema);
-      this.lastAccess.delete(schema);
+      this.connections.delete(connectionKey);
+      this.lastAccess.delete(connectionKey);
     }
   }
 
@@ -148,10 +180,15 @@ class ConnectionPool {
   }
 
   /**
-   * 检查指定 schema 是否有活跃连接
+   * 检查指定连接是否有活跃连接
    */
-  hasConnection(schema: string): boolean {
-    return this.connections.has(schema);
+  hasConnection(connectionName: string, schema?: string): boolean {
+    if (schema) {
+      return this.connections.has(this.buildConnectionKey(connectionName, schema));
+    }
+
+    const prefix = `${connectionName.toUpperCase()}::`;
+    return Array.from(this.connections.keys()).some((key) => key.startsWith(prefix));
   }
 }
 
