@@ -2,7 +2,11 @@ import { z } from 'zod';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
-import { getConfig, getConfiguredSchemas } from '../config.js';
+import {
+  getConfiguredConnections,
+  getConfiguredSchemas,
+  getDefaultConnectionName,
+} from '../config.js';
 import { withDmConnection } from '../utils/db.js';
 
 const listSchemasInputSchema = {};
@@ -17,43 +21,68 @@ export function registerListSchemasTool(server: McpServer): void {
     },
     async () => {
       try {
-        const config = getConfig();
-        const defaultSchema = config.schema;
+        const configuredConnections = getConfiguredConnections();
         const configuredSchemas = getConfiguredSchemas();
+        const defaultConnectionName = getDefaultConnectionName();
 
-        // 使用默认 schema 获取连接
-        const rows = await withDmConnection(defaultSchema, async (connection) => {
-          const sql = `
-            SELECT USERNAME as SCHEMA_NAME
-            FROM ALL_USERS
-            WHERE USERNAME NOT IN ('SYS', 'SYSTEM', 'SYSAUDITOR', 'SYSSSO', 'CTISYS')
-            ORDER BY USERNAME`;
-          const result = await connection.execute<{ SCHEMA_NAME: string }>(sql);
-          return result.rows ?? [];
-        });
+        const dbSchemasByConnection: Record<string, string[]> = {};
+        for (const configuredConnection of configuredConnections) {
+          try {
+            const rows = await withDmConnection(
+              {
+                connectionName: configuredConnection.name,
+                schema: configuredConnection.schema,
+              },
+              async (connection) => {
+                const sql = `
+                  SELECT USERNAME as SCHEMA_NAME
+                  FROM ALL_USERS
+                  WHERE USERNAME NOT IN ('SYS', 'SYSTEM', 'SYSAUDITOR', 'SYSSSO', 'CTISYS')
+                  ORDER BY USERNAME`;
+                const result = await connection.execute<{ SCHEMA_NAME: string }>(sql);
+                return result.rows ?? [];
+              }
+            );
 
-        const dbSchemas = rows.map((row) => row.SCHEMA_NAME);
+            dbSchemasByConnection[configuredConnection.name] = rows.map(
+              (row) => row.SCHEMA_NAME
+            );
+          } catch {
+            dbSchemasByConnection[configuredConnection.name] = [];
+          }
+        }
 
         // 构建输出
         const lines: string[] = [];
 
-        // 显示配置的模式
-        if (configuredSchemas.length > 0) {
-          lines.push('=== 已配置的模式 ===');
-          for (const s of configuredSchemas) {
-            const isDefault = s.name === defaultSchema;
-            const desc = s.description ? ` - ${s.description}` : '';
-            lines.push(`  ${s.name}${isDefault ? ' (默认)' : ''}${desc}`);
+        if (configuredConnections.length > 0) {
+          lines.push('=== 已配置的连接 ===');
+          for (const connection of configuredConnections) {
+            const isDefault = connection.name === defaultConnectionName;
+            const desc = connection.default ? ' [connection.default=true]' : '';
+            lines.push(
+              `  ${connection.name}${isDefault ? ' (默认连接)' : ''} -> ${connection.schema}${desc}`
+            );
+            for (const schema of connection.schemas ?? []) {
+              const schemaDesc = schema.description ? ` - ${schema.description}` : '';
+              lines.push(`    - ${schema.name}${schemaDesc}`);
+            }
           }
           lines.push('');
         }
 
-        // 显示数据库中的模式
-        lines.push('=== 数据库中的模式 ===');
-        for (const schema of dbSchemas) {
-          const isDefault = schema === defaultSchema;
-          const configured = configuredSchemas.find(s => s.name === schema);
-          lines.push(`  ${schema}${isDefault ? ' (默认)' : ''}${configured?.description ? ` - ${configured.description}` : ''}`);
+        if (configuredSchemas.length > 0) {
+          lines.push('=== 已配置的 Schema 汇总 ===');
+          for (const schema of configuredSchemas) {
+            const desc = schema.description ? ` - ${schema.description}` : '';
+            lines.push(`  ${schema.name}${desc}`);
+          }
+          lines.push('');
+        }
+
+        lines.push('=== 数据库中可见的模式 ===');
+        for (const [connectionName, dbSchemas] of Object.entries(dbSchemasByConnection)) {
+          lines.push(`  [${connectionName}] ${dbSchemas.join(', ') || '无可见模式或查询失败'}`);
         }
 
         return {
@@ -64,9 +93,10 @@ export function registerListSchemasTool(server: McpServer): void {
             },
           ],
           structuredContent: {
+            configuredConnections,
             configuredSchemas,
-            dbSchemas,
-            defaultSchema,
+            dbSchemasByConnection,
+            defaultConnectionName,
           },
         };
       } catch (error) {

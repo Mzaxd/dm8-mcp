@@ -2,16 +2,20 @@ import { z } from 'zod';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
-import { getConfig } from '../config.js';
 import { withDmConnection } from '../utils/db.js';
-import { assertReadOnlyQuery, normalizeIdentifier, ValidationError } from '../utils/validation.js';
+import { resolveTargetConnection } from '../utils/targetResolver.js';
+import { assertReadOnlyQuery, ValidationError } from '../utils/validation.js';
 
 const executeQueryInputSchema = {
   query: z.string().min(1, 'query 不能为空').describe('只读 SQL 语句'),
+  connection: z
+    .string()
+    .optional()
+    .describe('连接名。多连接模式下建议显式传入'),
   schema: z
     .string()
     .optional()
-    .describe('数据库 Schema，默认为配置中的 DM_SCHEMA'),
+    .describe('数据库 Schema，默认使用所选连接的默认 Schema'),
 };
 
 const executeQuerySchema = z.object(executeQueryInputSchema);
@@ -22,16 +26,17 @@ export function registerExecuteQueryTool(server: McpServer): void {
     'execute_query',
     {
       title: '执行只读 SQL',
-      description: '仅允许 SELECT/SHOW/DESCRIBE/EXPLAIN 语句。schema 参数支持别名或实际模式名',
+      description:
+        '仅允许 SELECT/SHOW/DESCRIBE/EXPLAIN 语句。支持多连接模式，schema 参数支持别名或实际模式名',
       inputSchema: executeQueryInputSchema,
     },
-    async ({ query, schema }: ExecuteQueryParams) => {
-      const effectiveSchema = schema ?? getConfig().schema;
+    async ({ query, connection, schema }: ExecuteQueryParams) => {
       try {
         assertReadOnlyQuery(query);
-        const normalizedSchema = normalizeIdentifier(effectiveSchema);
-        const result = await withDmConnection(normalizedSchema, async (connection) => {
-          return connection.execute<Record<string, unknown>>(query);
+        const target = resolveTargetConnection({ connection, schema });
+
+        const result = await withDmConnection(target, async (dbConnection) => {
+          return dbConnection.execute<Record<string, unknown>>(query);
         });
 
         const rows = result.rows ?? [];
@@ -48,6 +53,8 @@ export function registerExecuteQueryTool(server: McpServer): void {
         return {
           content: [{ type: 'text' as const, text: text || '查询无结果' }],
           structuredContent: {
+            connection: target.connectionName,
+            schema: target.schema,
             columns,
             rows,
           },

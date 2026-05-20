@@ -1,6 +1,6 @@
 {
   "name": "mcp-dm8-server",
-  "version": "1.2.0",
+  "version": "1.4.0",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -44,10 +44,8 @@
     "@modelcontextprotocol/sdk": "^1.21.0",
     "dmdb": "^1.0.40189",
     "dotenv": "^17.2.3",
-    "https-proxy-agent": "^7.0.6",
     "pino": "^9.5.0",
     "pino-pretty": "^11.2.2",
-    "socks-proxy-agent": "^8.0.5",
     "yargs": "^17.7.2",
     "yargs-parser": "^21.1.1",
     "zod": "^3.25.76"

@@ -2,15 +2,19 @@ import { z } from 'zod';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
-import { getConfig } from '../config.js';
 import { withDmConnection } from '../utils/db.js';
-import { normalizeIdentifier, ValidationError } from '../utils/validation.js';
+import { resolveTargetConnection } from '../utils/targetResolver.js';
+import { ValidationError } from '../utils/validation.js';
 
 const listTablesInputSchema = {
+  connection: z
+    .string()
+    .optional()
+    .describe('连接名。多连接模式下建议显式传入'),
   schema: z
     .string()
     .optional()
-    .describe('数据库 Schema，默认为配置中的默认 Schema'),
+    .describe('数据库 Schema，默认使用所选连接的默认 Schema'),
 };
 
 const listTablesSchema = z.object(listTablesInputSchema);
@@ -21,17 +25,16 @@ export function registerListTablesTool(server: McpServer): void {
     'list_tables',
     {
       title: '列出数据库中的所有表',
-      description: '返回指定 Schema 下的所有表名',
+      description: '返回指定连接和 Schema 下的所有表名',
       inputSchema: listTablesInputSchema,
     },
-    async ({ schema }: ListTablesParams) => {
-      const effectiveSchema = schema ?? getConfig().schema;
+    async ({ connection, schema }: ListTablesParams) => {
       try {
-        const normalizedSchema = normalizeIdentifier(effectiveSchema);
-        const rows = await withDmConnection(normalizedSchema, async (connection) => {
+        const target = resolveTargetConnection({ connection, schema });
+        const rows = await withDmConnection(target, async (dbConnection) => {
           const sql = `SELECT TABLE_NAME FROM ALL_TABLES WHERE OWNER = :owner ORDER BY TABLE_NAME`;
-          const result = await connection.execute<{ TABLE_NAME: string }>(sql, {
-            owner: normalizedSchema,
+          const result = await dbConnection.execute<{ TABLE_NAME: string }>(sql, {
+            owner: target.schema,
           });
           return result.rows ?? [];
         });
@@ -41,9 +44,14 @@ export function registerListTablesTool(server: McpServer): void {
           content: [
             {
               type: 'text' as const,
-              text: tables || `Schema ${normalizedSchema} 下未找到任何表`,
+              text: tables || `连接 ${target.connectionName} 的 Schema ${target.schema} 下未找到任何表`,
             },
           ],
+          structuredContent: {
+            connection: target.connectionName,
+            schema: target.schema,
+            tables: rows.map((row) => row.TABLE_NAME),
+          },
         };
       } catch (error) {
         const message =

@@ -17,13 +17,14 @@ vi.mock('../src/config.js', () => ({
     port: '5236',
     schema: 'TEST_SCHEMA',
   }),
-}));
-
-// Mock proxy 模块
-vi.mock('../src/utils/proxy.js', () => ({
-  setProxyEnv: vi.fn(),
-  restoreProxyEnv: vi.fn(),
-  validateProxyConfig: () => [],
+  getConnectionByName: () => ({
+    name: 'default',
+    username: 'testuser',
+    password: 'testpass',
+    host: 'localhost',
+    port: '5236',
+    schema: 'TEST_SCHEMA',
+  }),
 }));
 
 describe('ConnectionPool', () => {

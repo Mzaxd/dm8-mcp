@@ -1,114 +1,91 @@
-# MCP DM8 服务器
+# MCP DM8 Server
 
 [![npm version](https://badge.fury.io/js/mcp-dm8-server.svg)](https://badge.fury.io/js/mcp-dm8-server)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC)
+[![English](https://img.shields.io/badge/README-English-blue)](README.en.md)
 
-TypeScript 版达梦 DM8 Model Context Protocol (MCP) 服务，提供表结构浏览和只读查询能力，**支持代理连接**。
+TypeScript 实现的达梦 DM8 Model Context Protocol (MCP) 服务器，提供表结构浏览和只读 SQL 查询能力。支持多连接、多 Schema、配置文件管理以及主备容灾。
 
-## 🚀 快速开始（推荐方式）
+## 快速开始
 
-### 方式一：直接使用 npx（无需安装）
+### Claude Code（推荐）
 
-```bash
-npx mcp-dm8-server --host 127.0.0.1 --port 5236 --username SYSDBA --password 密码 --schema SYSDBA
+在项目根目录创建两个文件即可，所有配置都在项目内闭环：
+
+**`.claude/dm8-mcp.json`**（数据库连接配置）：
+
+```json
+{
+  "activeEnv": "dev",
+  "environments": {
+    "dev": {
+      "connections": [
+        {
+          "name": "GASBASE",
+          "host": "127.0.0.1",
+          "port": 5236,
+          "username": "SYSDBA",
+          "password": "your_password",
+          "schema": "GASBASE",
+          "default": true
+        }
+      ]
+    },
+    "prod": {
+      "connections": [
+        {
+          "name": "BASE",
+          "host": "10.0.1.100",
+          "masterHost": "10.0.1.200",
+          "port": 5236,
+          "username": "BASE",
+          "password": "your_password",
+          "schema": "BASE",
+          "default": true
+        }
+      ]
+    }
+  }
+}
 ```
 
-### 方式二：全局安装后使用
+**`.mcp.json`**（注册 MCP server，Claude Code 自动读取）：
 
-```bash
-# 全局安装
-npm install -g mcp-dm8-server
-
-# 使用命令
-mcp-dm8 --host 127.0.0.1 --port 5236 --username SYSDBA --password 密码 --schema SYSDBA
+```json
+{
+  "mcpServers": {
+    "dm8": {
+      "command": "npx",
+      "args": ["-y", "mcp-dm8-server", "--config", ".claude/dm8-mcp.json"],
+      "env": {
+        "NODE_OPTIONS": "--openssl-legacy-provider"
+      }
+    }
+  }
+}
 ```
 
-### 方式三：代理连接使用
+切换环境只需修改 `activeEnv` 为 `"prod"`，或通过 `--env prod` 覆盖。
 
-```bash
-npx mcp-dm8-server \
-  --host your_dm_host \
-  --username SYSDBA \
-  --password 密码 \
-  --schema SYSDBA \
-  --proxy-enabled \
-  --proxy-host proxy.company.com \
-  --proxy-port 8080 \
-  --proxy-type http
-```
+> **本地开发**：如果使用未发布到 npm 的本地版本，将 `command` 改为 `node`，`args` 改为 `["--openssl-legacy-provider", "/path/to/mcp-dm8-server/dist/cli.js", "--config", ".claude/dm8-mcp.json"]`。
 
-## ⚙️ MCP 客户端配置
+### Claude Desktop
 
-### Claude Desktop 配置（最常用）
-
-**配置文件位置**:
+配置文件位置：
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Linux: `~/.config/Claude/claude_desktop_config.json`
 
-#### 基础配置（无代理）
+通过 `--config` 传入配置文件的绝对路径：
 
 ```json
 {
   "mcpServers": {
     "dm8": {
       "command": "npx",
-      "args": [
-        "-y",
-        "mcp-dm8-server",
-        "--host", "127.0.0.1",
-        "--port", "5236",
-        "--username", "SYSDBA",
-        "--password", "your_password",
-        "--schema", "SYSDBA"
-      ]
-    }
-  }
-}
-```
-
-#### 代理配置（企业环境）
-
-```json
-{
-  "mcpServers": {
-    "dm8": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "mcp-dm8-server",
-        "--host", "your_dm_host",
-        "--username", "SYSDBA",
-        "--password", "your_password",
-        "--schema", "SYSDBA",
-        "--proxy-enabled",
-        "--proxy-host", "proxy.company.com",
-        "--proxy-port", "8080",
-        "--proxy-type", "http"
-      ]
-    }
-  }
-}
-```
-
-#### 环境变量配置（更安全）
-
-```json
-{
-  "mcpServers": {
-    "dm8": {
-      "command": "npx",
-      "args": ["-y", "mcp-dm8-server"],
+      "args": ["-y", "mcp-dm8-server", "--config", "/path/to/project/.claude/dm8-mcp.json"],
       "env": {
-        "DM_USERNAME": "SYSDBA",
-        "DM_PASSWORD": "your_password",
-        "DM_HOST": "your_dm_host",
-        "DM_PORT": "5236",
-        "DM_SCHEMA": "SYSDBA",
-        "DM_DB_PROXY_ENABLED": "true",
-        "DM_DB_PROXY_HOST": "proxy.company.com",
-        "DM_DB_PROXY_PORT": "8080",
-        "DM_DB_PROXY_TYPE": "http",
+        "DM_ENV": "production",
         "NODE_OPTIONS": "--openssl-legacy-provider"
       }
     }
@@ -116,126 +93,199 @@ npx mcp-dm8-server \
 }
 ```
 
-### 其他 MCP 客户端配置
+### 其他 MCP 客户端
 
-#### Cline (VSCode Extension)
+Cline、mcp-router 等客户端的配置格式与 Claude Desktop 一致，均为 JSON 格式的 `mcpServers` 配置。
 
-在 VSCode Settings → Cline → MCP Settings 中配置：
+## 可用工具
+
+| 工具名 | 描述 | 必填参数 | 可选参数 |
+|--------|------|----------|----------|
+| `list_schemas` | 列出已配置的连接、Schema 及数据库中可见的模式 | 无 | 无 |
+| `list_tables` | 列出指定 Schema 下的所有表 | 无 | `connection`, `schema` |
+| `describe_table` | 返回表的列名、类型、长度、是否可空 | `table` | `connection`, `schema` |
+| `execute_query` | 执行只读 SQL（SELECT/SHOW/DESCRIBE/EXPLAIN） | `query` | `connection`, `schema` |
+
+> **安全限制**: `execute_query` 仅允许 SELECT、SHOW、DESCRIBE、EXPLAIN 语句。
+
+所有工具均返回 `content`（文本）和 `structuredContent`（JSON）两种格式。
+
+### 使用示例
+
+```
+# 查看所有连接和 Schema
+list_schemas()
+
+# 使用默认连接查询
+list_tables()
+describe_table(table: "USERS")
+execute_query(query: "SELECT COUNT(*) FROM ORDERS")
+
+# 显式指定连接
+list_tables(connection: "hall")
+describe_table(connection: "gasbase", table: "ACT_GE_PROPERTY")
+execute_query(connection: "inspection", query: "SELECT COUNT(*) FROM USER_TABLES")
+
+# 只传 schema，自动匹配唯一连接
+list_tables(schema: "HALL")
+```
+
+### list_schemas 输出示例
+
+```
+=== 已配置的连接 ===
+  gasbase (默认连接) -> GASBASE [connection.default=true]
+    - GASBASE
+  hall -> HALL
+    - HALL - 大厅服务
+    - HALL_REPORT - 大厅报表
+
+=== 已配置的 Schema 汇总 ===
+  GASBASE
+  HALL - 大厅服务
+  HALL_REPORT - 大厅报表
+
+=== 数据库中可见的模式 ===
+  [gasbase] GASBASE, INSPECTION, SYSDBA
+  [hall] HALL, SYSDBA
+```
+
+## 配置文件格式
+
+`.claude/dm8-mcp.json` 支持多环境管理：
 
 ```json
 {
-  "mcpServers": {
-    "dm8": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "mcp-dm8-server",
-        "--host", "127.0.0.1",
-        "--port", "5236",
-        "--username", "SYSDBA",
-        "--password", "your_password",
-        "--schema", "SYSDBA"
+  "activeEnv": "dev",
+  "environments": {
+    "dev": {
+      "defaultConnection": "gasbase",
+      "connections": [
+        {
+          "name": "gasbase",
+          "host": "11.14.2.1",
+          "port": 5236,
+          "username": "GASBASE",
+          "password": "password1",
+          "schema": "GASBASE",
+          "default": true
+        }
+      ]
+    },
+    "staging": {
+      "connections": [
+        {
+          "name": "test_db",
+          "host": "192.168.1.100",
+          "port": 5236,
+          "username": "TESTER",
+          "password": "test_password",
+          "schema": "TEST_SCHEMA"
+        }
+      ]
+    },
+    "prod": {
+      "connections": [
+        {
+          "name": "BASE",
+          "host": "10.31.193.111",
+          "masterHost": "10.31.193.121",
+          "port": 5236,
+          "username": "BASE",
+          "password": "password",
+          "schema": "BASE",
+          "default": true
+        },
+        {
+          "name": "HALL",
+          "host": "10.31.193.111",
+          "masterHost": "10.31.193.121",
+          "port": 5236,
+          "username": "HALL",
+          "password": "password",
+          "schema": "HALL"
+        }
       ]
     }
   }
 }
 ```
 
-#### mcp-router 配置
+### 单连接多 Schema
 
-在 `~/.mcp-router/config.json` 中配置：
+一个账号可访问多个 Schema 时，有两种配置方式：
+
+**方式一：`schemas` 数组（推荐，支持描述信息）**
 
 ```json
 {
-  "servers": {
-    "dm8": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "mcp-dm8-server",
-        "--host", "127.0.0.1",
-        "--port", "5236",
-        "--username", "SYSDBA",
-        "--password", "your_password",
-        "--schema", "SYSDBA"
-      ],
-      "env": {
-        "NODE_OPTIONS": "--openssl-legacy-provider"
-      }
-    }
-  }
+  "name": "hall",
+  "host": "11.14.2.1",
+  "port": 5236,
+  "username": "HALL",
+  "password": "your_password",
+  "schema": "HALL",
+  "schemas": [
+    {"name": "HALL", "description": "大厅服务"},
+    {"name": "HALL_REPORT", "description": "大厅报表"}
+  ]
 }
 ```
 
-## 🌐 代理支持详情
+**方式二：`schema` 逗号拼接（简洁，适用于快速配置）**
 
-### 支持的代理类型
+```json
+{
+  "name": "hall",
+  "host": "11.14.2.1",
+  "port": 5236,
+  "username": "HALL",
+  "password": "your_password",
+  "schema": "HALL, HALL_REPORT, OTHER_SCHEMA",
+  "default": true
+}
+```
 
-- **HTTP**: 标准 HTTP 代理
-- **HTTPS**: HTTPS 代理
-- **SOCKS4**: SOCKS4 代理
-- **SOCKS5**: SOCKS5 代理
+系统会自动取第一个作为默认 Schema，其余全部加入访问白名单。
 
-### 配置参数
+### 连接路由逻辑
 
-| CLI 参数 | 环境变量 | 说明 | 默认值 |
-|----------|----------|------|--------|
-| `--proxy-enabled` | `DM_DB_PROXY_ENABLED` | 启用代理 | false |
-| `--proxy-host` | `DM_DB_PROXY_HOST` | 代理主机 | 无 |
-| `--proxy-port` | `DM_DB_PROXY_PORT` | 代理端口 | 无 |
-| `--proxy-type` | `DM_DB_PROXY_TYPE` | 代理类型 | http |
+当工具调用未显式指定 `connection` 参数时，按以下优先级路由：
 
-### 环境变量配置示例
+1. 指定了 `connection` → 使用该连接
+2. 指定了 `schema` → 匹配唯一拥有该 Schema 的连接（多个匹配则报错）
+3. 均未指定 → 使用 `defaultConnection` 或标记为 `default: true` 的连接
+
+### 主备容灾
+
+每个连接可配置 `masterHost` / `masterPort`，主库连接失败时自动切换到备用库：
+
+```json
+{
+  "name": "primary",
+  "host": "10.0.1.100",
+  "port": "5236",
+  "masterHost": "10.0.1.200",
+  "masterPort": "5236",
+  "username": "SYSDBA",
+  "password": "your_password",
+  "schema": "SYSDBA"
+}
+```
+
+## 备选配置方式（CLI / 环境变量）
+
+除了配置文件，也可以通过 CLI 参数或环境变量传入连接信息（适合简单场景或 CI 环境）：
 
 ```bash
-export DM_DB_PROXY_ENABLED="true"
-export DM_DB_PROXY_HOST="proxy.company.com"
-export DM_DB_PROXY_PORT="8080"
-export DM_DB_PROXY_TYPE="http"
+# 单连接
+npx mcp-dm8-server --host 127.0.0.1 --port 5236 --username SYSDBA --password 密码 --schema SYSDBA
 
-npx mcp-dm8-server --username SYSDBA --password 密码 --host your_dm_host --schema SYSDBA
+# 多连接
+npx mcp-dm8-server --connections '[{"name":"gasbase","host":"11.14.2.1","port":"5236","username":"GASBASE","password":"pwd","schema":"GASBASE","default":true}]'
 ```
 
-## 🛠️ 可用工具
-
-| 工具名 | 描述 | 参数 |
-|--------|------|------|
-| `list_schemas` | 列出可访问的数据库模式 | 无 |
-| `list_tables` | 列出指定 Schema 的所有表 | `schema` (可选) |
-| `describe_table` | 显示表结构信息 | `schema` (可选), `table` (必填) |
-| `execute_query` | 执行只读 SQL 查询 | `schema` (可选), `query` (必填) |
-
-> ⚠️ **安全限制**: 只允许执行 SELECT/SHOW/DESCRIBE/EXPLAIN 语句
-
-## 🗂️ 多模式支持
-
-支持在单个 MCP 实例中配置多个数据库模式，适用于分布式项目场景。
-
-### 配置方式
-
-#### CLI 参数配置
-
-```json
-{
-  "mcpServers": {
-    "dm8": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "mcp-dm8-server",
-        "--host", "127.0.0.1",
-        "--port", "5236",
-        "--username", "SYSDBA",
-        "--password", "your_password",
-        "--schema", "ORDER_MODULE",
-        "--schemas", "[{\"name\":\"ORDER_MODULE\",\"description\":\"订单模块\"},{\"name\":\"USER_MODULE\",\"description\":\"用户模块\"},{\"name\":\"PRODUCT_MODULE\",\"description\":\"商品模块\"}]"
-      ]
-    }
-  }
-}
-```
-
-#### 环境变量配置
+或通过环境变量：
 
 ```json
 {
@@ -248,141 +298,70 @@ npx mcp-dm8-server --username SYSDBA --password 密码 --host your_dm_host --sch
         "DM_PORT": "5236",
         "DM_USERNAME": "SYSDBA",
         "DM_PASSWORD": "your_password",
-        "DM_SCHEMA": "ORDER_MODULE",
-        "DM_SCHEMAS": "[{\"name\":\"ORDER_MODULE\",\"description\":\"订单模块\"},{\"name\":\"USER_MODULE\",\"description\":\"用户模块\"}]"
+        "DM_SCHEMA": "SYSDBA",
+        "NODE_OPTIONS": "--openssl-legacy-provider"
       }
     }
   }
 }
 ```
 
-### Schema 配置格式
+## 命令行参数
 
-```json
-[
-  {"name": "ORDER_MODULE", "description": "订单模块"},
-  {"name": "USER_MODULE", "description": "用户模块"},
-  {"name": "PRODUCT_MODULE", "description": "商品模块"}
-]
-```
+| 参数 | 环境变量 | 默认值 | 说明 |
+|------|----------|--------|------|
+| `--config` | `DM_CONFIG_FILE` | `.claude/dm8-mcp.json` | 配置文件路径 |
+| `--env` | `DM_ENV` | 配置文件中的 `activeEnv` | 配置文件中的环境名 |
+| `--host` | `DM_HOST` | - | 数据库主机地址 |
+| `--port` | `DM_PORT` | `5236` | 数据库端口 |
+| `--username` | `DM_USERNAME` | - | 数据库用户名 |
+| `--password` | `DM_PASSWORD` | - | 数据库密码 |
+| `--schema` | `DM_SCHEMA` | - | 默认 Schema |
+| `--schemas` | `DM_SCHEMAS` | - | Schema 列表（JSON 或逗号分隔） |
+| `--connections` | `DM_CONNECTIONS` | - | 多连接配置（JSON 数组） |
+| `--default-connection` | `DM_DEFAULT_CONNECTION` | - | 默认连接名 |
+| `--version` | - | - | 打印版本信息 |
 
-### 使用示例
+配置优先级（高→低）：CLI 参数 → 环境变量 → 配置文件。
 
-```
-# 查看所有配置的模式
-list_schemas()
+## 安全特性
 
-# 查询指定模式
-list_tables(schema: "ORDER_MODULE")
-describe_table(schema: "USER_MODULE", table: "t_user")
-execute_query(schema: "PRODUCT_MODULE", query: "SELECT * FROM products")
+- **SQL 注入防护**: 标识符格式校验 (`/^[A-Za-z_][A-Za-z0-9_]*$/`)，参数化查询
+- **只读强制**: 仅允许 SELECT / SHOW / DESCRIBE / EXPLAIN
+- **Schema 白名单**: `validateSchemaAccess()` 校验访问范围
+- **凭据保护**: 连接字符串中密码 URL 编码；配置文件被 `.gitignore` 忽略
+- **连接池管理**: `SELECT 1 FROM DUAL` 心跳检测，失效自动重建
 
-# 使用默认模式（不传 schema 参数）
-list_tables()
-```
-
-### 输出示例
-
-`list_schemas()` 输出：
-```
-=== 已配置的模式 ===
-  ORDER_MODULE (默认) - 订单模块
-  USER_MODULE - 用户模块
-  PRODUCT_MODULE - 商品模块
-
-=== 数据库中的模式 ===
-  ORDER_MODULE (默认) - 订单模块
-  PRODUCT_MODULE - 商品模块
-  USER_MODULE - 用户模块
-```
-
-## 📋 命令行参数
-
-| 参数 | 环境变量 | 必填 | 默认值 | 说明 |
-|------|----------|------|--------|------|
-| `--host` | `DM_HOST` | ✅ | 无 | 数据库主机地址 |
-| `--port` | `DM_PORT` | ❌ | 5236 | 数据库端口 |
-| `--username` | `DM_USERNAME` | ✅ | 无 | 数据库用户名 |
-| `--password` | `DM_PASSWORD` | ✅ | 无 | 数据库密码 |
-| `--schema` | `DM_SCHEMA` | ✅ | 无 | 默认数据库模式 |
-| `--schemas` | `DM_SCHEMAS` | ❌ | 无 | 模式列表配置 (JSON 格式) |
-| `--proxy-enabled` | `DM_DB_PROXY_ENABLED` | ❌ | false | 启用代理连接 |
-| `--proxy-host` | `DM_DB_PROXY_HOST` | ❌ | 无 | 代理服务器地址 |
-| `--proxy-port` | `DM_DB_PROXY_PORT` | ❌ | 无 | 代理服务器端口 |
-| `--proxy-type` | `DM_DB_PROXY_TYPE` | ❌ | http | 代理类型 |
-
-## 🔧 开发与本地构建
+## 开发
 
 ```bash
-# 克隆项目
-git clone https://github.com/lianekai/mcp-dm8-server.git
-cd mcp-dm8-server
-
 # 安装依赖
 npm install
 
-# 开发模式
+# 开发模式（tsx watch）
 npm run dev
 
-# 构建
+# 构建（tsup → dist/，ESM + 类型声明）
 npm run build
 
-# 本地测试
+# 测试（vitest）
 npm test
 
-# 本地运行
-node dist/index.js --host 127.0.0.1 --port 5236 --username SYSDBA --password 密码 --schema SYSDBA
+# 运行单个测试
+npx vitest run tests/validation.test.ts
+
+# 代码检查
+npm run lint
+
+# 格式化
+npm run format
 ```
 
-## 📌 注意事项
+> **Node.js 18+ 注意**: DM8 驱动依赖旧版 OpenSSL，需添加 `--openssl-legacy-provider`：
+> ```bash
+> NODE_OPTIONS=--openssl-legacy-provider npm run dev
+> ```
 
-### Node.js 版本要求
-
-- **Node.js 16.x**: 直接使用
-- **Node.js 18.x+**: 需要添加 `--openssl-legacy-provider` 参数
-
-```bash
-# Node.js 18+ 使用方式
-NODE_OPTIONS=--openssl-legacy-provider npx mcp-dm8-server --host 127.0.0.1 --username SYSDBA --password 密码 --schema SYSDBA
-```
-
-### 安全最佳实践
-
-1. **密码安全**: 建议使用环境变量存储敏感信息
-2. **网络安全**: 在企业环境中使用代理连接
-3. **权限控制**: 使用只读数据库用户
-4. **审计日志**: 启用数据库审计功能
-
-## 🛡️ 安全特性
-
-- ✅ SQL 注入防护
-- ✅ 连接池管理
-- ✅ 只读查询强制
-- ✅ 输入验证和超时控制
-- ✅ 结构化日志记录
-
-## ❓ 常见问题
-
-**Q: Node.js 18+ 启动失败？**
-使用 `NODE_OPTIONS=--openssl-legacy-provider` 参数
-
-**Q: 代理连接失败？**
-- 检查代理服务器状态
-- 验证代理地址和端口
-- 确认网络连接通畅
-
-**Q: 如何在 Claude Desktop 中使用？**
-将配置添加到 `claude_desktop_config.json` 文件中
-
-**Q: 支持哪些数据库操作？**
-仅支持只读操作：SELECT、SHOW、DESCRIBE、EXPLAIN
-
-## 📄 许可证
+## 许可证
 
 ISC License
-
----
-
-**维护状态**: 生产就绪，活跃维护
-**npm 包**: [mcp-dm8-server](https://www.npmjs.com/package/mcp-dm8-server)
-**GitHub**: [lianekai/mcp-dm8-server](https://github.com/lianekai/mcp-dm8-server)
