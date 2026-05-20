@@ -2,15 +2,19 @@ import { z } from 'zod';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
-import { getConfig } from '../config.js';
 import { withDmConnection } from '../utils/db.js';
+import { resolveTargetConnection } from '../utils/targetResolver.js';
 import { normalizeIdentifier, ValidationError } from '../utils/validation.js';
 
 const describeTableInputSchema = {
+  connection: z
+    .string()
+    .optional()
+    .describe('连接名。多连接模式下建议显式传入'),
   schema: z
     .string()
     .optional()
-    .describe('数据库 Schema，默认为配置中的默认 Schema'),
+    .describe('数据库 Schema，默认使用所选连接的默认 Schema'),
   table: z.string().min(1, '表名称不能为空').describe('表名称'),
 };
 
@@ -22,26 +26,25 @@ export function registerDescribeTableTool(server: McpServer): void {
     'describe_table',
     {
       title: '显示表结构',
-      description: '返回列名、类型、长度以及是否可空信息',
+      description: '返回指定连接和 Schema 下的列名、类型、长度以及是否可空信息',
       inputSchema: describeTableInputSchema,
     },
-    async ({ schema, table }: DescribeTableParams) => {
-      const effectiveSchema = schema ?? getConfig().schema;
+    async ({ connection, schema, table }: DescribeTableParams) => {
       try {
-        const normalizedSchema = normalizeIdentifier(effectiveSchema);
+        const target = resolveTargetConnection({ connection, schema });
         const normalizedTable = normalizeIdentifier(table);
-        const rows = await withDmConnection(normalizedSchema, async (connection) => {
+        const rows = await withDmConnection(target, async (dbConnection) => {
           const sql = `
             SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, NULLABLE
             FROM ALL_TAB_COLUMNS
             WHERE OWNER = :owner AND TABLE_NAME = :table
             ORDER BY COLUMN_ID`;
-          const result = await connection.execute<{
+          const result = await dbConnection.execute<{
             COLUMN_NAME: string;
             DATA_TYPE: string;
             DATA_LENGTH: number;
             NULLABLE: string;
-          }>(sql, { owner: normalizedSchema, table: normalizedTable });
+          }>(sql, { owner: target.schema, table: normalizedTable });
           return result.rows ?? [];
         });
 
@@ -51,7 +54,7 @@ export function registerDescribeTableTool(server: McpServer): void {
             content: [
               {
                 type: 'text' as const,
-                text: `未找到表 ${normalizedSchema}.${normalizedTable}`,
+                text: `未找到表 ${target.schema}.${normalizedTable}`,
               },
             ],
           };
@@ -69,6 +72,8 @@ export function registerDescribeTableTool(server: McpServer): void {
             },
           ],
           structuredContent: {
+            connection: target.connectionName,
+            schema: target.schema,
             columns,
             rows,
           },

@@ -32,3 +32,18 @@ export function assertReadOnlyQuery(query: string): void {
     throw new ValidationError('仅允许执行 SELECT/SHOW/DESCRIBE/EXPLAIN 语句');
   }
 }
+
+/**
+ * 验证 schema 是否在允许访问的白名单中。
+ * @param schema - 待验证的 schema 名称
+ * @param allowedSchemas - 允许的 schema 列表
+ */
+export function validateSchemaAccess(schema: string, allowedSchemas: string[]): void {
+  const normalizedSchema = schema.toUpperCase();
+  // 如果配置了白名单，则检查是否在列表中
+  if (allowedSchemas.length > 0 && !allowedSchemas.includes(normalizedSchema)) {
+    throw new ValidationError(
+      `Schema "${schema}" 不在配置允许访问的列表中。允许访问的 Schema: ${allowedSchemas.join(', ')}`
+    );
+  }
+}

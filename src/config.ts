@@ -109,6 +109,33 @@ function normalizeSchemaEntry(raw: unknown): SchemaConfig {
     : { name, description: String(descriptionValue) };
 }
 
+/**
+ * 展开逗号分隔的 schema 字符串为 schemas 数组
+ * 例如: "GASBASE,OTHER" → { schema: "GASBASE", schemas: [{ name: "GASBASE" }, { name: "OTHER" }] }
+ */
+function expandCommaSeparatedSchema(
+  schemaValue: string,
+  existingSchemas: SchemaConfig[] | undefined
+): { schema: string; schemas: SchemaConfig[] | undefined } {
+  if (!schemaValue.includes(',')) {
+    return { schema: schemaValue, schemas: existingSchemas };
+  }
+
+  const names = schemaValue
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (names.length === 0) {
+    return { schema: '', schemas: existingSchemas };
+  }
+
+  return {
+    schema: names[0],
+    schemas: existingSchemas ?? names.map((name) => ({ name })),
+  };
+}
+
 function parseSchemaConfigs(raw: unknown): SchemaConfig[] {
   if (Array.isArray(raw)) {
     return raw.map(normalizeSchemaEntry);
@@ -146,6 +173,8 @@ function normalizeConnectionConfig(raw: unknown): ConnectionConfig {
   const schemaValue = String(value.schema ?? '').trim();
   const effectiveSchema = schemaValue || schemas?.[0]?.name || '';
 
+  const expanded = expandCommaSeparatedSchema(effectiveSchema, schemas);
+
   const masterHost = String(value.masterHost ?? '').trim() || undefined;
   const masterPort = String(value.masterPort ?? '').trim() || undefined;
 
@@ -155,8 +184,8 @@ function normalizeConnectionConfig(raw: unknown): ConnectionConfig {
     port: String(value.port ?? DEFAULT_PORT).trim() || DEFAULT_PORT,
     username: String(value.username ?? '').trim(),
     password: String(value.password ?? ''),
-    schema: effectiveSchema,
-    schemas,
+    schema: expanded.schema,
+    schemas: expanded.schemas,
     default:
       typeof value.default === 'boolean'
         ? value.default
@@ -204,14 +233,21 @@ function resolveValue(key: keyof DMConfig, envKey: string): string {
 function materializeConnection(
   connection: ConnectionConfig,
 ): ConnectionConfig {
-  const schemas =
+  const expanded = expandCommaSeparatedSchema(
+    connection.schema,
     connection.schemas && connection.schemas.length > 0
       ? connection.schemas
-      : connection.schema
-        ? [{ name: connection.schema }]
+      : undefined
+  );
+
+  const schemas =
+    expanded.schemas && expanded.schemas.length > 0
+      ? expanded.schemas
+      : expanded.schema
+        ? [{ name: expanded.schema }]
         : [];
 
-  const schema = connection.schema || schemas[0]?.name || '';
+  const schema = expanded.schema || schemas[0]?.name || '';
 
   return {
     ...connection,

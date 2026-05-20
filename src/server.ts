@@ -3,7 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import pkg from '../package.json' with { type: 'json' };
 import type { DMConfig } from './config.js';
-import { getConfig } from './config.js';
+import { getConfig, getConfiguredConnections } from './config.js';
 import { closeAllConnections } from './utils/db.js';
 import { registerTools } from './tools/index.js';
 
@@ -35,27 +35,46 @@ function setupGracefulShutdown(): void {
 
 export async function startServer(): Promise<void> {
   const config = getConfig();
+  const configuredConnections = getConfiguredConnections();
 
   // 设置优雅关闭
   setupGracefulShutdown();
 
-  // 只在真正缺失配置时显示警告（通过 CLI 参数传递的不算缺失）
-  const requiredConfig: Array<keyof DMConfig> = [
-    'username',
-    'password',
-    'host',
-    'schema',
-  ];
-  const missingKeys = requiredConfig.filter((key) => !config[key]);
+  if (configuredConnections.length === 0) {
+    const requiredConfig: Array<keyof DMConfig> = [
+      'username',
+      'password',
+      'host',
+      'schema',
+    ];
+    const missingKeys = requiredConfig.filter((key) => !config[key]);
 
-  if (missingKeys.length > 0) {
-    // 友好提示：可以通过 CLI 参数或环境变量配置
-    console.warn(
-      `[DM8 MCP] 缺少数据库配置: ${missingKeys.join(', ')}`
+    if (missingKeys.length > 0) {
+      console.warn(`[DM8 MCP] 缺少数据库配置: ${missingKeys.join(', ')}`);
+      console.warn(
+        '[DM8 MCP] 提示: 可通过单连接参数传递，或使用 --connections / DM_CONNECTIONS 配置多连接'
+      );
+    }
+  } else {
+    const invalidConnections = configuredConnections.filter(
+      (connection) =>
+        !connection.name ||
+        !connection.host ||
+        !connection.username ||
+        !connection.password ||
+        !connection.schema
     );
-    console.warn(
-      `[DM8 MCP] 提示: 可通过 CLI 参数传递，如: --username SYSDBA --password xxx --host localhost --schema SYSDBA`
-    );
+
+    if (invalidConnections.length > 0) {
+      console.warn(
+        `[DM8 MCP] 以下连接配置不完整: ${invalidConnections
+          .map((connection) => connection.name || '<未命名连接>')
+          .join(', ')}`
+      );
+      console.warn(
+        '[DM8 MCP] 提示: 每个 connection 至少需要 name/host/username/password/schema'
+      );
+    }
   }
 
   const server = createServer();

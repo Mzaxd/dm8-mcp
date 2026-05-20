@@ -6,17 +6,25 @@ import { normalizeIdentifier } from './validation.js';
 // 重新导出连接池相关功能
 export { connectionPool, type PoolStats } from './connectionPool.js';
 
+export interface DmConnectionTarget {
+  connectionName: string;
+  schema: string;
+}
+
 /**
  * 使用连接池执行数据库操作
- * @param schema - 目标模式名
+ * @param target - 目标连接与模式
  * @param handler - 数据库操作处理器
  * @returns 操作结果
  */
 export async function withDmConnection<T>(
-  schema: string,
+  target: DmConnectionTarget,
   handler: (connection: Connection) => Promise<T>
 ): Promise<T> {
-  const connection = await connectionPool.getOrCreateConnection(schema);
+  const connection = await connectionPool.getOrCreateConnection(
+    target.connectionName,
+    target.schema
+  );
   // 连接池管理的连接不需要手动关闭
   return handler(connection);
 }
