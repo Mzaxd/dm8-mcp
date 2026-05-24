@@ -331,6 +331,7 @@ function loadConfigFile(): McpConfigFile | null {
  */
 export function resetConfigFileCache(): void {
   cachedConfigFile = undefined;
+  cachedConnections = undefined;
 }
 
 /**
@@ -444,33 +445,41 @@ export function getConfig(): DMConfig {
   return config;
 }
 
+let cachedConnections: ConnectionConfig[] | undefined;
+
 export function getConfiguredConnections(): ConnectionConfig[] {
+  if (cachedConnections) {
+    return cachedConnections;
+  }
+
   const config = getConfig();
 
+  let result: ConnectionConfig[];
   if (config.connections && config.connections.length > 0) {
-    return config.connections.map((connection) =>
+    result = config.connections.map((connection) =>
       materializeConnection(connection)
     );
+  } else if (!config.host && !config.username && !config.password && !config.schema) {
+    result = [];
+  } else {
+    result = [
+      materializeConnection(
+        {
+          name: config.defaultConnection || DEFAULT_CONNECTION_NAME,
+          host: config.host,
+          port: config.port,
+          username: config.username,
+          password: config.password,
+          schema: config.schema,
+          schemas: config.schemas,
+          default: true,
+        },
+      ),
+    ];
   }
 
-  if (!config.host && !config.username && !config.password && !config.schema) {
-    return [];
-  }
-
-  return [
-    materializeConnection(
-      {
-        name: config.defaultConnection || DEFAULT_CONNECTION_NAME,
-        host: config.host,
-        port: config.port,
-        username: config.username,
-        password: config.password,
-        schema: config.schema,
-        schemas: config.schemas,
-        default: true,
-      },
-    ),
-  ];
+  cachedConnections = result;
+  return result;
 }
 
 export function getConfiguredSchemas(): SchemaConfig[] {

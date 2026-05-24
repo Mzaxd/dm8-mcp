@@ -23,15 +23,15 @@ class ConnectionPool {
   private lastAccess: Map<string, Date> = new Map();
   private isShuttingDown = false;
 
+  // 空闲超过此时间（毫秒）才做 SELECT 1 探活
+  private static readonly LIVENESS_THRESHOLD_MS = 30_000;
+
   private buildConnectionKey(connectionName: string, schema: string): string {
     return `${connectionName.toUpperCase()}::${schema.toUpperCase()}`;
   }
 
   /**
    * 获取或创建指定连接与 schema 的连接
-   * @param connectionName - 连接名
-   * @param schema - 目标模式名
-   * @returns 数据库连接
    */
   async getOrCreateConnection(
     connectionName: string,
@@ -43,22 +43,24 @@ class ConnectionPool {
 
     const connectionKey = this.buildConnectionKey(connectionName, schema);
 
-    // 检查是否已有连接
     const existingConn = this.connections.get(connectionKey);
     if (existingConn) {
-      // 验证连接是否仍然有效
+      const elapsed = Date.now() - (this.lastAccess.get(connectionKey)?.getTime() ?? 0);
+      if (elapsed < ConnectionPool.LIVENESS_THRESHOLD_MS) {
+        // 最近用过，跳过探活直接复用
+        return existingConn;
+      }
+      // 空闲较久，验证连接是否仍然有效
       try {
         await existingConn.execute('SELECT 1 FROM DUAL');
         this.lastAccess.set(connectionKey, new Date());
         return existingConn;
       } catch {
-        // 连接已失效，移除并重新创建
         this.connections.delete(connectionKey);
         this.lastAccess.delete(connectionKey);
       }
     }
 
-    // 创建新连接
     const connection = await this.createConnection(connectionName, schema);
     this.connections.set(connectionKey, connection);
     this.lastAccess.set(connectionKey, new Date());
@@ -120,9 +122,25 @@ class ConnectionPool {
     schema: string
   ): Promise<Connection> {
     const connectString = `dm://${encodedUser}:${encodedPassword}@${host}:${port}`;
-    const connection = await dmdb.getConnection(connectString);
+    const connection = await this.withTimeout(
+      dmdb.getConnection(connectString),
+      10000,
+      `连接 ${host}:${port} 超时`
+    );
     await connection.execute(`SET SCHEMA "${schema}"`);
     return connection;
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms);
+    });
+    try {
+      return await Promise.race([promise, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /**
