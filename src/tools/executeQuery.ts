@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { withDmConnection } from '../utils/db.js';
+import { isExplainStatement, rewriteExplain } from '../utils/explainHelper.js';
 import { resolveTargetConnection } from '../utils/targetResolver.js';
 import { assertReadOnlyQuery, ValidationError } from '../utils/validation.js';
 
@@ -35,8 +36,10 @@ export function registerExecuteQueryTool(server: McpServer): void {
         assertReadOnlyQuery(query);
         const target = resolveTargetConnection({ connection, schema });
 
+        const effectiveQuery = isExplainStatement(query) ? rewriteExplain(query) : query;
+
         const result = await withDmConnection(target, async (dbConnection) => {
-          return dbConnection.execute<Record<string, unknown>>(query);
+          return dbConnection.execute<Record<string, unknown>>(effectiveQuery);
         });
 
         const rows = result.rows ?? [];
