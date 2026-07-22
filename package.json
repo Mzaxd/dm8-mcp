@@ -37,6 +37,10 @@
   "author": "",
   "license": "ISC",
   "description": "MCP server for DM8 database operations with enhanced security. Provides read-only database access via Model Context Protocol.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Mzaxd/dm8-mcp.git"
+  },
   "engines": {
     "node": ">=16"
   },
