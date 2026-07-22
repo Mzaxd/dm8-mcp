@@ -1,0 +1,42 @@
+# 发版工作流：push 形如 v1.5.0 的 tag 时，自动 build + test + 发布到 npm。
+# 前置：在 GitHub 仓库 Settings → Secrets and variables → Actions 配置 NPM_TOKEN
+# （npm access token，建议 Granular 且仅授权 mcp-dm8-server 的 publish）。
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    name: Build, test & publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance（供应链来源签名，需要 public 包）
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Publish to npm
+        # provenance 给包打上来源签名；若 NPM_TOKEN 为 legacy classic token 导致失败，去掉 --provenance 即可
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
