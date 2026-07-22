@@ -123,6 +123,9 @@ config/local.ts
 .claude/dm8-mcp.json
 .claude/dm8-mcp.local.json
 
+# Integration test secrets (local DB credentials, do not commit)
+tests/integration.config.json
+
 # Database connection files (might contain credentials)
 *.db-shm
 *.db-wal
