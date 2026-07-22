@@ -1,6 +1,6 @@
 {
   "name": "mcp-dm8-server",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
