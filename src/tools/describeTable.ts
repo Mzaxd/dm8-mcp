@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { withDmConnection } from '../utils/db.js';
 import { resolveTargetConnection } from '../utils/targetResolver.js';
-import { normalizeIdentifier, ValidationError } from '../utils/validation.js';
+import { normalizeIdentifier } from '../utils/validation.js';
 
 const describeTableInputSchema = {
   connection: z
@@ -80,9 +80,7 @@ export function registerDescribeTableTool(server: McpServer): void {
         };
       } catch (error) {
         const message =
-          error instanceof ValidationError || error instanceof Error
-            ? error.message
-            : '查询表结构时发生未知错误';
+          error instanceof Error ? error.message : '查询表结构时发生未知错误';
         return {
           isError: true,
           content: [{ type: 'text' as const, text: message }],

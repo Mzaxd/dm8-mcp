@@ -4,7 +4,6 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { withDmConnection } from '../utils/db.js';
 import { resolveTargetConnection } from '../utils/targetResolver.js';
-import { ValidationError } from '../utils/validation.js';
 
 const listTablesInputSchema = {
   connection: z
@@ -55,9 +54,7 @@ export function registerListTablesTool(server: McpServer): void {
         };
       } catch (error) {
         const message =
-          error instanceof ValidationError || error instanceof Error
-            ? error.message
-            : '列出表时发生未知错误';
+          error instanceof Error ? error.message : '列出表时发生未知错误';
         return {
           isError: true,
           content: [{ type: 'text' as const, text: message }],

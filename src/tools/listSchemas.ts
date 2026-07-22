@@ -1,5 +1,3 @@
-import { z } from 'zod';
-
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import {
@@ -59,9 +57,8 @@ export function registerListSchemasTool(server: McpServer): void {
           lines.push('=== 已配置的连接 ===');
           for (const connection of configuredConnections) {
             const isDefault = connection.name === defaultConnectionName;
-            const desc = connection.default ? ' [connection.default=true]' : '';
             lines.push(
-              `  ${connection.name}${isDefault ? ' (默认连接)' : ''} -> ${connection.schema}${desc}`
+              `  ${connection.name}${isDefault ? ' (默认连接)' : ''} -> ${connection.schema}`
             );
             for (const schema of connection.schemas ?? []) {
               const schemaDesc = schema.description ? ` - ${schema.description}` : '';
