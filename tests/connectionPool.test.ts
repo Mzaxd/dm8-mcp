@@ -5,6 +5,7 @@ vi.mock('dmdb', () => ({
   default: {
     OUT_FORMAT_OBJECT: 0,
     getConnection: vi.fn(),
+    createPool: vi.fn(),
   },
 }));
 
@@ -41,7 +42,7 @@ describe('ConnectionPool', () => {
   it('should create connection pool module without errors', async () => {
     const { connectionPool } = await import('../src/utils/connectionPool.js');
     expect(connectionPool).toBeDefined();
-    expect(typeof connectionPool.getOrCreateConnection).toBe('function');
+    expect(typeof connectionPool.getOrCreatePool).toBe('function');
     expect(typeof connectionPool.closeAll).toBe('function');
     expect(typeof connectionPool.getStats).toBe('function');
   });
@@ -61,6 +62,31 @@ describe('ConnectionPool', () => {
   it('should close all connections without error', async () => {
     const { connectionPool } = await import('../src/utils/connectionPool.js');
     await expect(connectionPool.closeAll()).resolves.not.toThrow();
+  });
+
+  it('should cache one pool per connection::schema key', async () => {
+    const dmdbDefault = (await import('dmdb')).default as {
+      createPool: ReturnType<typeof vi.fn>;
+    };
+    const fakePool = {
+      close: vi.fn().mockResolvedValue(undefined),
+      connectionsOpen: 2,
+    };
+    dmdbDefault.createPool.mockResolvedValue(fakePool);
+
+    const { connectionPool } = await import('../src/utils/connectionPool.js');
+    const p1 = await connectionPool.getOrCreatePool('default', 'TEST_SCHEMA');
+    const p2 = await connectionPool.getOrCreatePool('default', 'TEST_SCHEMA');
+
+    // 同一 connection::schema 只建一个 Pool（P0：并行查询共享 Pool 而非单连接）
+    expect(p1).toBe(p2);
+    expect(dmdbDefault.createPool).toHaveBeenCalledTimes(1);
+    // schema 走 connectString，由 dmdb 在新连接 openConnection 时自动 SET SCHEMA
+    const attrs = dmdbDefault.createPool.mock.calls[0][0] as { connectString: string };
+    expect(attrs.connectString).toContain('?schema=TEST_SCHEMA');
+
+    await connectionPool.closeAll();
+    expect(fakePool.close).toHaveBeenCalledTimes(1);
   });
 });
 
