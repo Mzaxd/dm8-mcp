@@ -1,7 +1,6 @@
 import type { Connection } from 'dmdb';
 
 import { connectionPool } from './connectionPool.js';
-import { normalizeIdentifier } from './validation.js';
 
 // 重新导出连接池相关功能
 export { connectionPool, type PoolStats } from './connectionPool.js';
@@ -12,25 +11,33 @@ export interface DmConnectionTarget {
 }
 
 /**
- * 使用连接池执行数据库操作
- * @param target - 目标连接与模式
- * @param handler - 数据库操作处理器
- * @returns 操作结果
+ * 使用连接池执行数据库操作。
+ * 每次调用从 dmdb Pool 借出一个连接，handler 结束后归还池，
+ * 使并行查询互不阻塞（Pool 内多个连接可并发执行）。
  */
 export async function withDmConnection<T>(
   target: DmConnectionTarget,
   handler: (connection: Connection) => Promise<T>
 ): Promise<T> {
-  const connection = await connectionPool.getOrCreateConnection(
+  const pool = await connectionPool.getOrCreatePool(
     target.connectionName,
     target.schema
   );
-  // 连接池管理的连接不需要手动关闭
-  return handler(connection);
+  const connection = await pool.getConnection();
+  try {
+    return await handler(connection);
+  } finally {
+    // 归还池（dmdb PoolConnection.close 是归还，非真关）
+    try {
+      await connection.close();
+    } catch {
+      // 归还失败忽略，连接会被驱动按 poolTimeout 回收
+    }
+  }
 }
 
 /**
- * 关闭所有连接池中的连接
+ * 关闭所有连接池
  */
 export async function closeAllConnections(): Promise<void> {
   await connectionPool.closeAll();
@@ -41,13 +48,4 @@ export async function closeAllConnections(): Promise<void> {
  */
 export function getPoolStats() {
   return connectionPool.getStats();
-}
-
-/**
- * 设置连接的 schema（用于连接池中的连接切换）
- * @deprecated 连接池会自动设置 schema，通常不需要手动调用
- */
-export async function ensureSchema(connection: Connection, schema: string): Promise<void> {
-  const normalized = normalizeIdentifier(schema);
-  await connection.execute(`SET SCHEMA "${normalized}"`);
 }

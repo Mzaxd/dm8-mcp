@@ -1,5 +1,5 @@
 import dmdb from 'dmdb';
-import type { Connection } from 'dmdb';
+import type { Pool, PoolAttributes } from 'dmdb';
 
 import { getConnectionByName } from '../config.js';
 
@@ -14,66 +14,53 @@ export interface PoolStats {
   lastAccessTime: Record<string, Date>;
 }
 
+// ponytail: 池参数从 env 读取，覆盖常见场景；需要按连接精细调参时再升级为 ConnectionConfig 字段
+const POOL_MAX = Number(process.env.DM_POOL_MAX) || 5;
+const POOL_MIN = Number(process.env.DM_POOL_MIN) || 1;
+const POOL_TIMEOUT = Number(process.env.DM_POOL_TIMEOUT) || 60;
+const CONNECT_TIMEOUT_MS = 10_000;
+
 /**
- * DM8 数据库连接池
- * 按 schema 缓存连接，支持连接复用
+ * DM8 数据库连接池。
+ * 按 connectionName::schema 缓存 dmdb Pool，每个 Pool 内多个连接可并行执行查询，
+ * 避免单 Connection 并发不安全导致的串行阻塞。
  */
 class ConnectionPool {
-  private connections: Map<string, Connection> = new Map();
+  private pools: Map<string, Pool> = new Map();
   private lastAccess: Map<string, Date> = new Map();
   private isShuttingDown = false;
-
-  // 空闲超过此时间（毫秒）才做 SELECT 1 探活
-  private static readonly LIVENESS_THRESHOLD_MS = 30_000;
 
   private buildConnectionKey(connectionName: string, schema: string): string {
     return `${connectionName.toUpperCase()}::${schema.toUpperCase()}`;
   }
 
   /**
-   * 获取或创建指定连接与 schema 的连接
+   * 获取或创建指定连接与 schema 的连接池。
    */
-  async getOrCreateConnection(
-    connectionName: string,
-    schema: string
-  ): Promise<Connection> {
+  async getOrCreatePool(connectionName: string, schema: string): Promise<Pool> {
     if (this.isShuttingDown) {
-      throw new Error('连接池正在关闭，无法创建新连接');
+      throw new Error('连接池正在关闭，无法创建新连接池');
     }
 
     const connectionKey = this.buildConnectionKey(connectionName, schema);
-
-    const existingConn = this.connections.get(connectionKey);
-    if (existingConn) {
-      const elapsed = Date.now() - (this.lastAccess.get(connectionKey)?.getTime() ?? 0);
-      if (elapsed < ConnectionPool.LIVENESS_THRESHOLD_MS) {
-        // 最近用过，跳过探活直接复用
-        return existingConn;
-      }
-      // 空闲较久，验证连接是否仍然有效
-      try {
-        await existingConn.execute('SELECT 1 FROM DUAL');
-        this.lastAccess.set(connectionKey, new Date());
-        return existingConn;
-      } catch {
-        this.connections.delete(connectionKey);
-        this.lastAccess.delete(connectionKey);
-      }
+    const existingPool = this.pools.get(connectionKey);
+    if (existingPool) {
+      this.lastAccess.set(connectionKey, new Date());
+      return existingPool;
     }
 
-    const connection = await this.createConnection(connectionName, schema);
-    this.connections.set(connectionKey, connection);
+    const pool = await this.createPool(connectionName, schema);
+    this.pools.set(connectionKey, pool);
     this.lastAccess.set(connectionKey, new Date());
-    return connection;
+    return pool;
   }
 
   /**
-   * 创建新的数据库连接，支持主从 fallback
+   * 创建连接池，支持主从 fallback。
+   * schema 通过 connectString 的 ?schema= 传入，dmdb 在每个新连接 openConnection 时
+   * 自动执行 SET SCHEMA（见 dmdb connection.js: conn_prop_schema 处理），无需手动维护。
    */
-  private async createConnection(
-    connectionName: string,
-    schema: string
-  ): Promise<Connection> {
+  private async createPool(connectionName: string, schema: string): Promise<Pool> {
     const config = getConnectionByName(connectionName);
     if (!config) {
       throw new Error(`未找到连接 "${connectionName}"`);
@@ -91,21 +78,21 @@ class ConnectionPool {
     const encodedPassword = encodeURIComponent(password);
 
     try {
-      const connection = await this.buildConnection(
-        encodedUser, encodedPassword, host, port, schema
-      );
-      return connection;
+      return await this.openPool(encodedUser, encodedPassword, host, port, schema);
     } catch (primaryError) {
       if (masterHost) {
         const effectiveMasterPort = masterPort || port;
         console.error(
-          `[DM8 MCP] 连接 ${host}:${port} 失败，fallback 到主库 ${masterHost}:${effectiveMasterPort}`
+          `[DM8 MCP] 连接 ${host}:${port} 建池失败，fallback 到主库 ${masterHost}:${effectiveMasterPort}`
         );
         try {
-          const connection = await this.buildConnection(
-            encodedUser, encodedPassword, masterHost, effectiveMasterPort, schema
+          return await this.openPool(
+            encodedUser,
+            encodedPassword,
+            masterHost,
+            effectiveMasterPort,
+            schema
           );
-          return connection;
         } catch {
           // fallback 也失败，抛出原始错误
         }
@@ -114,21 +101,28 @@ class ConnectionPool {
     }
   }
 
-  private async buildConnection(
+  private async openPool(
     encodedUser: string,
     encodedPassword: string,
     host: string,
     port: string,
     schema: string
-  ): Promise<Connection> {
-    const connectString = `dm://${encodedUser}:${encodedPassword}@${host}:${port}`;
-    const connection = await this.withTimeout(
-      dmdb.getConnection(connectString),
-      10000,
-      `连接 ${host}:${port} 超时`
+  ): Promise<Pool> {
+    const attributes: PoolAttributes = {
+      // schema 走 query 参数：dmdb 解析后在新连接 openConnection 时自动 SET SCHEMA
+      connectString: `dm://${encodedUser}:${encodedPassword}@${host}:${port}?schema=${schema}`,
+      poolMin: POOL_MIN,
+      poolMax: POOL_MAX,
+      poolTimeout: POOL_TIMEOUT,
+      // 借出前自动探活，替代手动的 SELECT 1 FROM DUAL
+      testOnBorrow: true,
+      validationQuery: 'select 1 from dual',
+    };
+    return this.withTimeout(
+      dmdb.createPool(attributes),
+      CONNECT_TIMEOUT_MS,
+      `连接 ${host}:${port} 建池超时`
     );
-    await connection.execute(`SET SCHEMA "${schema}"`);
-    return connection;
   }
 
   private async withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
@@ -144,69 +138,73 @@ class ConnectionPool {
   }
 
   /**
-   * 关闭指定连接与 schema 的连接
+   * 关闭指定连接与 schema 的连接池
    */
   async closeConnection(connectionName: string, schema: string): Promise<void> {
     const connectionKey = this.buildConnectionKey(connectionName, schema);
-    const connection = this.connections.get(connectionKey);
-    if (connection) {
+    const pool = this.pools.get(connectionKey);
+    if (pool) {
       try {
-        await connection.close();
+        await pool.close();
       } catch {
         // 忽略关闭错误
       }
-      this.connections.delete(connectionKey);
+      this.pools.delete(connectionKey);
       this.lastAccess.delete(connectionKey);
     }
   }
 
   /**
-   * 关闭所有连接
+   * 关闭所有连接池
    */
   async closeAll(): Promise<void> {
     this.isShuttingDown = true;
 
-    const closePromises = Array.from(this.connections.entries()).map(
-      async ([schema, connection]) => {
-        try {
-          await connection.close();
-        } catch {
-          // 忽略单个连接关闭错误
-        }
+    const closePromises = Array.from(this.pools.values()).map(async (pool) => {
+      try {
+        await pool.close();
+      } catch {
+        // 忽略单个连接池关闭错误
       }
-    );
+    });
 
     await Promise.allSettled(closePromises);
-    this.connections.clear();
+    this.pools.clear();
     this.lastAccess.clear();
   }
 
   /**
-   * 获取连接池统计信息
+   * 获取连接池统计信息。
+   * totalConnections 为所有 Pool 当前打开连接数（使用中 + 空闲）之和。
    */
   getStats(): PoolStats {
     const lastAccessTime: Record<string, Date> = {};
-    this.lastAccess.forEach((date, schema) => {
-      lastAccessTime[schema] = date;
+    this.lastAccess.forEach((date, key) => {
+      lastAccessTime[key] = date;
+    });
+
+    let totalConnections = 0;
+    this.pools.forEach((pool) => {
+      totalConnections += pool.connectionsOpen;
     });
 
     return {
-      totalConnections: this.connections.size,
-      schemas: Array.from(this.connections.keys()),
+      totalConnections,
+      schemas: Array.from(this.pools.keys()),
       lastAccessTime,
     };
   }
 
   /**
-   * 检查指定连接是否有活跃连接
+   * 检查指定连接是否有活跃连接池
    */
   hasConnection(connectionName: string, schema?: string): boolean {
     if (schema) {
-      return this.connections.has(this.buildConnectionKey(connectionName, schema));
+      return this.pools.has(this.buildConnectionKey(connectionName, schema));
     }
 
     const prefix = `${connectionName.toUpperCase()}::`;
-    return Array.from(this.connections.keys()).some((key) => key.startsWith(prefix));
+    return Array.from(this.pools.keys()).some((key) => key.startsWith(prefix));
   }
 }
 
