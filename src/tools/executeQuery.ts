@@ -5,7 +5,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { withDmConnection } from '../utils/db.js';
 import { isExplainStatement, rewriteExplain } from '../utils/explainHelper.js';
 import { resolveTargetConnection } from '../utils/targetResolver.js';
-import { assertReadOnlyQuery, assertReadonlyByStatementType } from '../utils/validation.js';
+import { assertReadOnlyQuery } from '../utils/validation.js';
 
 // ponytail: 结果行数硬上限防止拉全表撑爆响应；content 仅渲染前 N 行预览，
 // 完整数据走 structuredContent，避免大结果 TSV 与结构化数据双倍序列化。
@@ -48,7 +48,7 @@ export function registerExecuteQueryTool(server: McpServer): void {
     },
     async ({ query, connection, schema, maxRows }: ExecuteQueryParams) => {
       try {
-        // 前缀 + 分号预检（同步、廉价），驱动级权威校验在拿到连接后补做
+        // 前缀白名单 + 分号多语句拦截（同步、零副作用）
         assertReadOnlyQuery(query);
         const target = resolveTargetConnection({ connection, schema });
 
@@ -56,9 +56,6 @@ export function registerExecuteQueryTool(server: McpServer): void {
         const rowLimit = maxRows ?? DEFAULT_MAX_ROWS;
 
         const result = await withDmConnection(target, async (dbConnection) => {
-          // 驱动级权威只读校验：基于 statementType 识别前缀欺骗/SELECT INTO；
-          // SHOW/DESCRIBE 等无法 prepare 的语句降级到上方前缀检查。
-          await assertReadonlyByStatementType(dbConnection, effectiveQuery);
           return dbConnection.execute<Record<string, unknown>>(effectiveQuery);
         });
 
