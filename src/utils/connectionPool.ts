@@ -28,6 +28,8 @@ const CONNECT_TIMEOUT_MS = 10_000;
 class ConnectionPool {
   private pools: Map<string, Pool> = new Map();
   private lastAccess: Map<string, Date> = new Map();
+  // ponytail: 同 key 并发建池去重，避免 dmdb 1.0.52452+ 下同 poolAlias 第二次 createPool 报 [20006]
+  private pendings: Map<string, Promise<Pool>> = new Map();
   private isShuttingDown = false;
 
   private buildConnectionKey(connectionName: string, schema: string): string {
@@ -49,10 +51,23 @@ class ConnectionPool {
       return existingPool;
     }
 
-    const pool = await this.createPool(connectionName, schema);
-    this.pools.set(connectionKey, pool);
-    this.lastAccess.set(connectionKey, new Date());
-    return pool;
+    // 并发去重：同 key 并发首次建池只触发一次 createPool。
+    // 否则 dmdb 1.0.52452+ 会对同一 poolAlias 的第二次 createPool 抛 [20006]。
+    const inflight = this.pendings.get(connectionKey);
+    if (inflight) return inflight;
+
+    const creating = this.createPool(connectionName, schema)
+      .then((pool) => {
+        this.pools.set(connectionKey, pool);
+        this.lastAccess.set(connectionKey, new Date());
+        return pool;
+      })
+      .finally(() => {
+        this.pendings.delete(connectionKey);
+      });
+
+    this.pendings.set(connectionKey, creating);
+    return creating;
   }
 
   /**
@@ -77,8 +92,19 @@ class ConnectionPool {
     const encodedUser = encodeURIComponent(username);
     const encodedPassword = encodeURIComponent(password);
 
+    // ponytail: dmdb 1.0.52452+ 的 createPool 无 poolAlias 守卫且默认别名 "default"，
+    // 不传则所有池挤到同一别名，第二个池必报 [20006]。显式传唯一别名（= 缓存 key）。
+    const poolAlias = this.buildConnectionKey(connectionName, schema);
+
     try {
-      return await this.openPool(encodedUser, encodedPassword, host, port, schema);
+      return await this.openPool(
+        encodedUser,
+        encodedPassword,
+        host,
+        port,
+        schema,
+        poolAlias
+      );
     } catch (primaryError) {
       if (masterHost) {
         const effectiveMasterPort = masterPort || port;
@@ -91,7 +117,8 @@ class ConnectionPool {
             encodedPassword,
             masterHost,
             effectiveMasterPort,
-            schema
+            schema,
+            poolAlias
           );
         } catch {
           // fallback 也失败，抛出原始错误
@@ -106,11 +133,14 @@ class ConnectionPool {
     encodedPassword: string,
     host: string,
     port: string,
-    schema: string
+    schema: string,
+    poolAlias: string
   ): Promise<Pool> {
     const attributes: PoolAttributes = {
       // schema 走 query 参数：dmdb 解析后在新连接 openConnection 时自动 SET SCHEMA
       connectString: `dm://${encodedUser}:${encodedPassword}@${host}:${port}?schema=${schema}`,
+      // 唯一别名，避免 dmdb 默认 "default" 别名挤兑（见 createPool 注释）
+      poolAlias,
       poolMin: POOL_MIN,
       poolMax: POOL_MAX,
       poolTimeout: POOL_TIMEOUT,
@@ -152,6 +182,7 @@ class ConnectionPool {
       this.pools.delete(connectionKey);
       this.lastAccess.delete(connectionKey);
     }
+    this.pendings.delete(connectionKey);
   }
 
   /**
@@ -171,6 +202,7 @@ class ConnectionPool {
     await Promise.allSettled(closePromises);
     this.pools.clear();
     this.lastAccess.clear();
+    this.pendings.clear();
   }
 
   /**

@@ -88,6 +88,32 @@ describe('ConnectionPool', () => {
     await connectionPool.closeAll();
     expect(fakePool.close).toHaveBeenCalledTimes(1);
   });
+
+  it('should dedupe concurrent pool creation and set unique poolAlias', async () => {
+    const dmdbDefault = (await import('dmdb')).default as {
+      createPool: ReturnType<typeof vi.fn>;
+    };
+    const fakePool = {
+      close: vi.fn().mockResolvedValue(undefined),
+      connectionsOpen: 1,
+    };
+    dmdbDefault.createPool.mockResolvedValue(fakePool);
+
+    const { connectionPool } = await import('../src/utils/connectionPool.js');
+    // 并发同 key：只触发一次 createPool，两个调用拿到同一个 Pool
+    const [p1, p2] = await Promise.all([
+      connectionPool.getOrCreatePool('default', 'TEST_SCHEMA'),
+      connectionPool.getOrCreatePool('default', 'TEST_SCHEMA'),
+    ]);
+    expect(p1).toBe(p2);
+    expect(dmdbDefault.createPool).toHaveBeenCalledTimes(1);
+
+    // poolAlias 唯一（= 缓存 key），避免 dmdb 默认 "default" 别名挤兑
+    const attrs = dmdbDefault.createPool.mock.calls[0][0] as { poolAlias: string };
+    expect(attrs.poolAlias).toBe('DEFAULT::TEST_SCHEMA');
+
+    await connectionPool.closeAll();
+  });
 });
 
 describe('db module with connection pool', () => {
