@@ -51,8 +51,8 @@ describe('config file loading', () => {
     delete process.env.DM_HOST;
     delete process.env.DM_CONFIG_FILE;
 
-    const { getConfiguredConnections, resetConfigFileCache } = await import('../src/config.js');
-    resetConfigFileCache();
+    const { getConfiguredConnections, resetConfigCache } = await import('../src/config.js');
+    resetConfigCache();
 
     const connections = getConfiguredConnections();
     expect(connections).toHaveLength(1);
@@ -85,8 +85,8 @@ describe('config file loading', () => {
     delete process.env.DM_HOST;
     delete process.env.DM_CONFIG_FILE;
 
-    const { setConfig, getConfiguredConnections, resetConfigFileCache } = await import('../src/config.js');
-    resetConfigFileCache();
+    const { setConfig, getConfiguredConnections, resetConfigCache } = await import('../src/config.js');
+    resetConfigCache();
     setConfig({ env: 'prod' } as any);
 
     const connections = getConfiguredConnections();
@@ -110,8 +110,8 @@ describe('config file loading', () => {
 
     process.chdir(tmpDir);
 
-    const { setConfig, getConfiguredConnections, resetConfigFileCache } = await import('../src/config.js');
-    resetConfigFileCache();
+    const { setConfig, getConfiguredConnections, resetConfigCache } = await import('../src/config.js');
+    resetConfigCache();
     setConfig({
       connections: [{
         name: 'CLI_DB', host: 'cli-host', port: 5236,
@@ -139,8 +139,8 @@ describe('config file loading', () => {
 
     process.chdir(tmpDir);
 
-    const { setConfig, getConfiguredConnections, resetConfigFileCache } = await import('../src/config.js');
-    resetConfigFileCache();
+    const { setConfig, getConfiguredConnections, resetConfigCache } = await import('../src/config.js');
+    resetConfigCache();
     setConfig({
       host: 'cli-host',
       username: 'cli-user',
@@ -162,8 +162,8 @@ describe('config file loading', () => {
     delete process.env.DM_SCHEMA;
     delete process.env.DM_CONFIG_FILE;
 
-    const { getConfiguredConnections, resetConfigFileCache } = await import('../src/config.js');
-    resetConfigFileCache();
+    const { getConfiguredConnections, resetConfigCache } = await import('../src/config.js');
+    resetConfigCache();
 
     const connections = getConfiguredConnections();
     expect(connections).toHaveLength(0);
@@ -193,8 +193,8 @@ describe('config file loading', () => {
     delete process.env.DM_HOST;
     delete process.env.DM_CONFIG_FILE;
 
-    const { getConnectionByName, resetConfigFileCache } = await import('../src/config.js');
-    resetConfigFileCache();
+    const { getConnectionByName, resetConfigCache } = await import('../src/config.js');
+    resetConfigCache();
 
     // Trigger config loading
     const { getConfiguredConnections: _g } = await import('../src/config.js');
@@ -225,8 +225,8 @@ describe('config file loading', () => {
     delete process.env.DM_HOST;
     delete process.env.DM_CONFIG_FILE;
 
-    const { getDefaultConnectionName, resetConfigFileCache } = await import('../src/config.js');
-    resetConfigFileCache();
+    const { getDefaultConnectionName, resetConfigCache } = await import('../src/config.js');
+    resetConfigCache();
 
     expect(getDefaultConnectionName()).toBe('HALL');
   });
@@ -252,8 +252,8 @@ describe('config file loading', () => {
     delete process.env.DM_HOST;
     delete process.env.DM_CONFIG_FILE;
 
-    const { setConfig, getConfiguredConnections, resetConfigFileCache } = await import('../src/config.js');
-    resetConfigFileCache();
+    const { setConfig, getConfiguredConnections, resetConfigCache } = await import('../src/config.js');
+    resetConfigCache();
     setConfig({ configFile: configPath } as any);
 
     const connections = getConfiguredConnections();

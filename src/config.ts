@@ -259,6 +259,8 @@ function materializeConnection(
 
 export function setConfig(partial: Partial<DMConfig>): void {
   Object.assign(runtimeOverrides, partial);
+  // 配置变更后必须失效缓存，否则 getConfiguredConnections/getConfig 仍返回旧值
+  resetConfigCache();
 }
 
 /**
@@ -327,9 +329,10 @@ function loadConfigFile(): McpConfigFile | null {
 }
 
 /**
- * 重置配置文件缓存（测试用）
+ * 重置配置缓存（配置文件 + 已解析连接）。setConfig 内部自动调用；
+ * 导出供测试在 chdir / 改 env 后手动重置。
  */
-export function resetConfigFileCache(): void {
+export function resetConfigCache(): void {
   cachedConfigFile = undefined;
   cachedConnections = undefined;
 }

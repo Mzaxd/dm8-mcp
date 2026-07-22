@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Connection } from 'dmdb';
 
-import { setConfig, resetConfigFileCache } from '../src/config.js';
+import { setConfig, resetConfigCache } from '../src/config.js';
 import { withDmConnection, closeAllConnections } from '../src/utils/db.js';
 
 const CONFIG_PATH = path.join(__dirname, 'integration.config.json');
@@ -25,7 +25,7 @@ const TARGET = { connectionName: 'dev-GAS', schema: 'GASBASE' };
 describe('集成测试（真实 DM8）', () => {
   beforeAll(() => {
     if (!enabled) return;
-    resetConfigFileCache();
+    resetConfigCache();
     // 把本地 integration.config.json 注入 config.ts（最高优先级）
     setConfig({ configFile: CONFIG_PATH });
   });

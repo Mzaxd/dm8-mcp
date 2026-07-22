@@ -17,15 +17,26 @@ export function createServer(): McpServer {
 }
 
 /**
- * 优雅关闭处理
+ * 优雅关闭处理。
+ * 兜底超时：closeAll 若卡住（dmdb pool.close 等连接 drain），强制退出，避免 SIGTERM 后进程悬挂被外部 SIGKILL。
  */
 function setupGracefulShutdown(): void {
+  let shuttingDown = false;
   const shutdown = async () => {
+    if (shuttingDown) return; // 防止 SIGINT/SIGTERM 重复触发
+    shuttingDown = true;
+
+    const forceExitTimer = setTimeout(() => {
+      console.error('[DM8 MCP] 优雅关闭超时，强制退出');
+      process.exit(1);
+    }, 5000);
+
     try {
       await closeAllConnections();
     } catch {
       // 忽略关闭错误
     }
+    clearTimeout(forceExitTimer);
     process.exit(0);
   };
 
