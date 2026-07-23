@@ -14,6 +14,8 @@ function createToolCapture() {
     ) {
       tools.set(name, { config, handler });
     },
+    // execute_query 上报 logging 用；其余工具不调用也无妨
+    sendLoggingMessage: vi.fn().mockResolvedValue(undefined),
   };
   return { server, tools };
 }
@@ -247,5 +249,36 @@ describe('execute_query tool', () => {
     };
     expect(res.isError).toBe(true);
     expect(dbMock.execute).not.toHaveBeenCalled();
+  });
+
+  it('emits a logging notification per successful query', async () => {
+    dbMock.state.result = { rows: [{ A: 1 }] };
+    const { server, tools } = createToolCapture();
+    registerExecuteQueryTool(server as never);
+
+    await tools.get('execute_query')!.handler({ query: 'SELECT 1 FROM DUAL' });
+    expect(server.sendLoggingMessage).toHaveBeenCalledTimes(1);
+    const params = server.sendLoggingMessage.mock.calls[0][0] as {
+      level: string;
+      logger: string;
+      data: { query: string; slow: boolean };
+    };
+    expect(params.logger).toBe('dm8.execute_query');
+    expect(params.level).toBe('info');
+    expect(params.data.query).toBe('SELECT 1 FROM DUAL');
+    expect(params.data.slow).toBe(false);
+  });
+
+  it('emits an error-level log on failure', async () => {
+    const { server, tools } = createToolCapture();
+    registerExecuteQueryTool(server as never);
+
+    await tools.get('execute_query')!.handler({ query: 'DROP TABLE x' });
+    const params = server.sendLoggingMessage.mock.calls[0][0] as {
+      level: string;
+      data: { error: string };
+    };
+    expect(params.level).toBe('error');
+    expect(params.data.error).toContain('仅允许');
   });
 });

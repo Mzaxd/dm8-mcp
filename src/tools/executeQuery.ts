@@ -9,9 +9,10 @@ import { assertReadOnlyQuery } from '../utils/validation.js';
 
 // ponytail: 结果行数硬上限防止拉全表撑爆响应；content 仅渲染前 N 行预览，
 // 完整数据走 structuredContent，避免大结果 TSV 与结构化数据双倍序列化。
-// 升级路径：如需防"数据库传输爆"（不仅仅是响应爆），改用 resultSet 流式 + getRows(limit)。
 const DEFAULT_MAX_ROWS = Number(process.env.DM_MAX_ROWS) || 1000;
 const CONTENT_PREVIEW_ROWS = Number(process.env.DM_CONTENT_PREVIEW_ROWS) || 50;
+// ponytail: 慢查询阈值，超出则 logging 上报为 warning。
+const SLOW_QUERY_MS = Number(process.env.DM_SLOW_QUERY_MS) || 1000;
 
 // ponytail: 全局 fetchAsString 已把 CLOB 转 string，但 BLOB/大整数等仍可能返回
 // 不可 JSON 序列化的值（Lob 流对象含 BigInt 属性、BigInt 本身），导致 MCP
@@ -33,6 +34,30 @@ function safeRow(row: Record<string, unknown>): Record<string, unknown> {
     }
   }
   return out;
+}
+
+/** 上报查询日志（best-effort）。client 未订阅 logging 时静默忽略。 */
+function logQuery(
+  server: McpServer,
+  info: {
+    query: string;
+    connectionName: string;
+    schema: string;
+    elapsedMs: number;
+    rowCount: number;
+    truncated: boolean;
+  }
+): void {
+  const slow = info.elapsedMs > SLOW_QUERY_MS;
+  server
+    .sendLoggingMessage({
+      level: slow ? 'warning' : 'info',
+      logger: 'dm8.execute_query',
+      data: { ...info, slow },
+    })
+    .catch(() => {
+      /* client 未启用 logging capability，忽略 */
+    });
 }
 
 const executeQueryInputSchema = {
@@ -76,9 +101,10 @@ export function registerExecuteQueryTool(server: McpServer): void {
 
         const effectiveQuery = isExplainStatement(query) ? rewriteExplain(query) : query;
         const rowLimit = maxRows ?? DEFAULT_MAX_ROWS;
+        const startedAt = Date.now();
 
         const result = await withDmConnection(target, async (dbConnection) => {
-          // 驱动层 maxRows：多取 1 行判断是否截断，避免把全表拉进内存（ ponytail: 替代原先的拉全表后 slice）
+          // 驱动层 maxRows：多取 1 行判断是否截断，避免把全表拉进内存
           return dbConnection.execute<Record<string, unknown>>(
             effectiveQuery,
             {},
@@ -108,6 +134,15 @@ export function registerExecuteQueryTool(server: McpServer): void {
         }
         const text = textParts.join('\n');
 
+        logQuery(server, {
+          query,
+          connectionName: target.connectionName,
+          schema: target.schema,
+          elapsedMs: Date.now() - startedAt,
+          rowCount: rows.length,
+          truncated,
+        });
+
         return {
           content: [{ type: 'text' as const, text: text || '查询无结果' }],
           structuredContent: {
@@ -124,6 +159,15 @@ export function registerExecuteQueryTool(server: McpServer): void {
       } catch (error) {
         const message =
           error instanceof Error ? error.message : '执行查询时发生未知错误';
+        server
+          .sendLoggingMessage({
+            level: 'error',
+            logger: 'dm8.execute_query',
+            data: { query, error: message },
+          })
+          .catch(() => {
+            /* 忽略 */
+          });
         return {
           isError: true,
           content: [{ type: 'text' as const, text: message }],
