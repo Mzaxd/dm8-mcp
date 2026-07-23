@@ -78,13 +78,18 @@ export function registerExecuteQueryTool(server: McpServer): void {
         const rowLimit = maxRows ?? DEFAULT_MAX_ROWS;
 
         const result = await withDmConnection(target, async (dbConnection) => {
-          return dbConnection.execute<Record<string, unknown>>(effectiveQuery);
+          // 驱动层 maxRows：多取 1 行判断是否截断，避免把全表拉进内存（ ponytail: 替代原先的拉全表后 slice）
+          return dbConnection.execute<Record<string, unknown>>(
+            effectiveQuery,
+            {},
+            { maxRows: rowLimit + 1 }
+          );
         });
 
-        const allRows = (result.rows ?? []).map(safeRow);
-        const truncated = allRows.length > rowLimit;
+        const fetched = (result.rows ?? []).map(safeRow);
+        const truncated = fetched.length > rowLimit;
         // 截断到 maxRows，防止响应过大
-        const rows = truncated ? allRows.slice(0, rowLimit) : allRows;
+        const rows = truncated ? fetched.slice(0, rowLimit) : fetched;
         const columns =
           result.metaData?.map((meta) => meta.name) ??
           (rows[0] ? Object.keys(rows[0]) : []);
@@ -96,9 +101,9 @@ export function registerExecuteQueryTool(server: McpServer): void {
           columns.map((column) => String(row[column] ?? '')).join('\t')
         );
         const textParts = [header, ...dataLines].filter(Boolean);
-        if (allRows.length > CONTENT_PREVIEW_ROWS) {
+        if (fetched.length > CONTENT_PREVIEW_ROWS) {
           textParts.push(
-            `... (预览前 ${CONTENT_PREVIEW_ROWS} 行，共 ${allRows.length} 行，完整数据见 structuredContent)`
+            `... (预览前 ${CONTENT_PREVIEW_ROWS} 行，共 ${fetched.length} 行，完整数据见 structuredContent)`
           );
         }
         const text = textParts.join('\n');
@@ -110,7 +115,9 @@ export function registerExecuteQueryTool(server: McpServer): void {
             schema: target.schema,
             columns,
             rows,
-            rowCount: allRows.length,
+            // ponytail: 驱动层已按 maxRows+1 截断，truncated 时真实总行数未知；
+            // rowCount 报实际返回行数，truncated 标志表明有更多数据。
+            rowCount: rows.length,
             truncated,
           },
         };

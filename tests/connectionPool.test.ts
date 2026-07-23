@@ -114,6 +114,44 @@ describe('ConnectionPool', () => {
 
     await connectionPool.closeAll();
   });
+
+  it('injects socketTimeout into connectString when DM_QUERY_TIMEOUT_MS set', async () => {
+    process.env.DM_QUERY_TIMEOUT_MS = '30000';
+    try {
+      vi.resetModules();
+      const dmdbDefault = (await import('dmdb')).default as {
+        createPool: ReturnType<typeof vi.fn>;
+      };
+      dmdbDefault.createPool.mockResolvedValue({
+        close: vi.fn().mockResolvedValue(undefined),
+        connectionsOpen: 1,
+      });
+      const { connectionPool } = await import('../src/utils/connectionPool.js');
+      await connectionPool.getOrCreatePool('default', 'TEST_SCHEMA');
+      const attrs = dmdbDefault.createPool.mock.calls[0][0] as { connectString: string };
+      expect(attrs.connectString).toContain('socketTimeout=30000');
+      await connectionPool.closeAll();
+    } finally {
+      delete process.env.DM_QUERY_TIMEOUT_MS;
+    }
+  });
+
+  it('omits socketTimeout when DM_QUERY_TIMEOUT_MS unset', async () => {
+    delete process.env.DM_QUERY_TIMEOUT_MS;
+    vi.resetModules();
+    const dmdbDefault = (await import('dmdb')).default as {
+      createPool: ReturnType<typeof vi.fn>;
+    };
+    dmdbDefault.createPool.mockResolvedValue({
+      close: vi.fn().mockResolvedValue(undefined),
+      connectionsOpen: 1,
+    });
+    const { connectionPool } = await import('../src/utils/connectionPool.js');
+    await connectionPool.getOrCreatePool('default', 'TEST_SCHEMA');
+    const attrs = dmdbDefault.createPool.mock.calls[0][0] as { connectString: string };
+    expect(attrs.connectString).not.toContain('socketTimeout');
+    await connectionPool.closeAll();
+  });
 });
 
 describe('db module with connection pool', () => {
