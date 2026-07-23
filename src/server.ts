@@ -4,6 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import pkg from '../package.json' with { type: 'json' };
 import type { DMConfig } from './config.js';
 import { getConfig, getConfiguredConnections } from './config.js';
+import { registerTableResource } from './resources/tableResource.js';
 import { closeAllConnections } from './utils/db.js';
 import { registerTools } from './tools/index.js';
 
@@ -13,6 +14,7 @@ export function createServer(): McpServer {
     version: pkg.version ?? '0.0.0',
   });
   registerTools(server);
+  registerTableResource(server);
   return server;
 }
 

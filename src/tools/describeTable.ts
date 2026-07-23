@@ -2,9 +2,54 @@ import { z } from 'zod';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
+import type { DmConnectionTarget } from '../utils/db.js';
 import { withDmConnection } from '../utils/db.js';
 import { resolveTargetConnection } from '../utils/targetResolver.js';
 import { normalizeIdentifier } from '../utils/validation.js';
+
+export interface ColumnRow {
+  COLUMN_NAME: string;
+  DATA_TYPE: string;
+  DATA_LENGTH: number;
+  NULLABLE: string;
+  COMMENTS?: string | null;
+}
+
+const COLUMN_SQL = `
+  SELECT c.COLUMN_NAME, c.DATA_TYPE, c.DATA_LENGTH, c.NULLABLE, cc.COMMENTS
+  FROM ALL_TAB_COLUMNS c
+  LEFT JOIN ALL_COL_COMMENTS cc
+    ON cc.OWNER = c.OWNER
+   AND cc.TABLE_NAME = c.TABLE_NAME
+   AND cc.COLUMN_NAME = c.COLUMN_NAME
+  WHERE c.OWNER = :owner AND c.TABLE_NAME = :table
+  ORDER BY c.COLUMN_ID`;
+
+/**
+ * 查询表的列定义（含注释）。describe_table 工具与 table resource 共用，
+ * 避免 SQL 两处重复（ponytail: reuse over re-implement）。
+ */
+export async function fetchTableColumns(
+  target: DmConnectionTarget,
+  table: string
+): Promise<ColumnRow[]> {
+  return withDmConnection(target, async (dbConnection) => {
+    const result = await dbConnection.execute<ColumnRow>(COLUMN_SQL, {
+      owner: target.schema,
+      table,
+    });
+    return result.rows ?? [];
+  });
+}
+
+/** 把列行渲染为 `NAME TYPE(LEN) NULL  -- 注释` 文本行。 */
+export function formatColumnRows(rows: ColumnRow[]): string[] {
+  return rows.map((row) => {
+    const base = `${row.COLUMN_NAME} ${row.DATA_TYPE}(${row.DATA_LENGTH}) ${row.NULLABLE}`;
+    const comment = row.COMMENTS?.trim();
+    return comment ? `${base}  -- ${comment}` : base;
+  });
+}
 
 const describeTableInputSchema = {
   connection: z
@@ -21,14 +66,6 @@ const describeTableInputSchema = {
 const describeTableSchema = z.object(describeTableInputSchema);
 type DescribeTableParams = z.infer<typeof describeTableSchema>;
 
-interface ColumnRow {
-  COLUMN_NAME: string;
-  DATA_TYPE: string;
-  DATA_LENGTH: number;
-  NULLABLE: string;
-  COMMENTS?: string | null;
-}
-
 export function registerDescribeTableTool(server: McpServer): void {
   server.registerTool(
     'describe_table',
@@ -42,24 +79,7 @@ export function registerDescribeTableTool(server: McpServer): void {
       try {
         const target = resolveTargetConnection({ connection, schema });
         const normalizedTable = normalizeIdentifier(table);
-        const rows = await withDmConnection(target, async (dbConnection) => {
-          // ponytail: 左连接 ALL_COL_COMMENTS 取列注释；COMMENTS 为 VARCHAR2，序列化安全。
-          // DATA_DEFAULT（ALL_TAB_COLUMNS）是 LONG 类型，dmdb 序列化风险高，留作升级路径。
-          const sql = `
-            SELECT c.COLUMN_NAME, c.DATA_TYPE, c.DATA_LENGTH, c.NULLABLE, cc.COMMENTS
-            FROM ALL_TAB_COLUMNS c
-            LEFT JOIN ALL_COL_COMMENTS cc
-              ON cc.OWNER = c.OWNER
-             AND cc.TABLE_NAME = c.TABLE_NAME
-             AND cc.COLUMN_NAME = c.COLUMN_NAME
-            WHERE c.OWNER = :owner AND c.TABLE_NAME = :table
-            ORDER BY c.COLUMN_ID`;
-          const result = await dbConnection.execute<ColumnRow>(sql, {
-            owner: target.schema,
-            table: normalizedTable,
-          });
-          return result.rows ?? [];
-        });
+        const rows = await fetchTableColumns(target, normalizedTable);
 
         if (rows.length === 0) {
           return {
@@ -73,18 +93,12 @@ export function registerDescribeTableTool(server: McpServer): void {
           };
         }
 
-        const lines = rows.map((row) => {
-          const base = `${row.COLUMN_NAME} ${row.DATA_TYPE}(${row.DATA_LENGTH}) ${row.NULLABLE}`;
-          // 注释非空则追加，帮助 LLM 理解字段业务含义
-          const comment = row.COMMENTS?.trim();
-          return comment ? `${base}  -- ${comment}` : base;
-        });
         const columns = ['COLUMN_NAME', 'DATA_TYPE', 'DATA_LENGTH', 'NULLABLE', 'COMMENTS'];
         return {
           content: [
             {
               type: 'text' as const,
-              text: lines.join('\n'),
+              text: formatColumnRows(rows).join('\n'),
             },
           ],
           structuredContent: {
