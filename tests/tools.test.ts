@@ -71,6 +71,7 @@ vi.mock('../src/config.js', () => ({
 }));
 
 import { registerDescribeTableTool } from '../src/tools/describeTable.js';
+import { registerExecuteQueryTool } from '../src/tools/executeQuery.js';
 import { registerListIndexesTool } from '../src/tools/listIndexes.js';
 
 describe('describe_table tool', () => {
@@ -188,5 +189,63 @@ describe('list_indexes tool', () => {
     };
     expect(res.content[0].text).toContain('未找到索引');
     expect(res.structuredContent.indexes).toEqual([]);
+  });
+});
+
+describe('execute_query tool', () => {
+  beforeEach(() => {
+    dbMock.state.result = { rows: [] };
+    dbMock.execute.mockClear();
+  });
+
+  it('passes driver-level maxRows = rowLimit + 1 to execute', async () => {
+    dbMock.state.result = { rows: [{ A: 1 }, { A: 2 }] };
+    const { server, tools } = createToolCapture();
+    registerExecuteQueryTool(server as never);
+
+    await tools.get('execute_query')!.handler({ query: 'SELECT * FROM DUAL', maxRows: 10 });
+    // execute(sql, binds, options) —— 第三参数为驱动层 maxRows
+    const opts = dbMock.execute.mock.calls[0][2] as { maxRows: number };
+    expect(opts.maxRows).toBe(11);
+  });
+
+  it('marks truncated and slices when rows exceed maxRows', async () => {
+    dbMock.state.result = { rows: [{ A: 1 }, { A: 2 }, { A: 3 }, { A: 4 }] };
+    const { server, tools } = createToolCapture();
+    registerExecuteQueryTool(server as never);
+
+    const res = (await tools
+      .get('execute_query')!
+      .handler({ query: 'SELECT * FROM DUAL', maxRows: 3 })) as {
+      structuredContent: { truncated: boolean; rows: unknown[]; rowCount: number };
+    };
+    expect(res.structuredContent.truncated).toBe(true);
+    expect(res.structuredContent.rows).toHaveLength(3);
+    expect(res.structuredContent.rowCount).toBe(3);
+  });
+
+  it('does not mark truncated when within maxRows', async () => {
+    dbMock.state.result = { rows: [{ A: 1 }, { A: 2 }] };
+    const { server, tools } = createToolCapture();
+    registerExecuteQueryTool(server as never);
+
+    const res = (await tools
+      .get('execute_query')!
+      .handler({ query: 'SELECT * FROM DUAL', maxRows: 10 })) as {
+      structuredContent: { truncated: boolean; rowCount: number };
+    };
+    expect(res.structuredContent.truncated).toBe(false);
+    expect(res.structuredContent.rowCount).toBe(2);
+  });
+
+  it('rejects non-read-only query before touching the DB', async () => {
+    const { server, tools } = createToolCapture();
+    registerExecuteQueryTool(server as never);
+
+    const res = (await tools.get('execute_query')!.handler({ query: 'DROP TABLE x' })) as {
+      isError: boolean;
+    };
+    expect(res.isError).toBe(true);
+    expect(dbMock.execute).not.toHaveBeenCalled();
   });
 });

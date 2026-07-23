@@ -23,6 +23,10 @@ const POOL_MAX = Number(process.env.DM_POOL_MAX) || 5;
 const POOL_MIN = Number(process.env.DM_POOL_MIN) || 1;
 const POOL_TIMEOUT = Number(process.env.DM_POOL_TIMEOUT) || 60;
 const CONNECT_TIMEOUT_MS = 10_000;
+// ponytail: socketTimeout 是 dmdb 连接级查询超时（见 index.d.ts ConnectionAttributes.socketTimeout），
+// 执行耗时超过该值的 SQL 会被服务端报错。0=不限。影响该连接所有 SQL（含心跳，但 SELECT 1 极快不触发）。
+// 防恶意/意外慢查询长期占用连接。升级路径：需按单条查询粒度超时，改用 resultSet 流式 + 应用层 Promise.race。
+const QUERY_TIMEOUT_MS = Number(process.env.DM_QUERY_TIMEOUT_MS) || 0;
 
 /**
  * DM8 数据库连接池。
@@ -140,9 +144,13 @@ class ConnectionPool {
     schema: string,
     poolAlias: string
   ): Promise<Pool> {
+    // socketTimeout 仅在配置 >0 时拼入连接串，避免改动默认行为
+    const query = QUERY_TIMEOUT_MS > 0
+      ? `?schema=${schema}&socketTimeout=${QUERY_TIMEOUT_MS}`
+      : `?schema=${schema}`;
     const attributes: PoolAttributes = {
       // schema 走 query 参数：dmdb 解析后在新连接 openConnection 时自动 SET SCHEMA
-      connectString: `dm://${encodedUser}:${encodedPassword}@${host}:${port}?schema=${schema}`,
+      connectString: `dm://${encodedUser}:${encodedPassword}@${host}:${port}${query}`,
       // 唯一别名，避免 dmdb 默认 "default" 别名挤兑（见 createPool 注释）
       poolAlias,
       poolMin: POOL_MIN,
