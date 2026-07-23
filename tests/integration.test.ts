@@ -85,6 +85,40 @@ describe('集成测试（真实 DM8）', () => {
     // 宽松断言：并行应明显快于串行（池让查询真正并发，而非共享单连接串行）
     expect(parallel).toBeLessThan(serial);
   }, 60000);
+
+  // P1a：验证 describe_table 增强的 ALL_COL_COMMENTS join 在真实 DM8 上语法正确
+  it.runIf(enabled)('describe_table 的 ALL_COL_COMMENTS left join 可跑', async () => {
+    const rows = await withDmConnection(TARGET, async (c) => {
+      const r = await c.execute<{ COLUMN_NAME: string; COMMENTS: string | null }>(
+        `SELECT c.COLUMN_NAME, cc.COMMENTS
+         FROM ALL_TAB_COLUMNS c
+         LEFT JOIN ALL_COL_COMMENTS cc
+           ON cc.OWNER = c.OWNER AND cc.TABLE_NAME = c.TABLE_NAME AND cc.COLUMN_NAME = c.COLUMN_NAME
+         WHERE c.OWNER = :owner AND ROWNUM <= 1`,
+        { owner: 'GASBASE' }
+      );
+      return r.rows ?? [];
+    });
+    console.log('[集成] describe join 样本:', rows[0]);
+    expect(Array.isArray(rows)).toBe(true);
+  });
+
+  // P1a：验证 list_indexes 的 ALL_INDEXES + ALL_IND_COLUMNS join 在真实 DM8 上语法正确
+  it.runIf(enabled)('list_indexes 的 ALL_INDEXES + ALL_IND_COLUMNS join 可跑', async () => {
+    const rows = await withDmConnection(TARGET, async (c) => {
+      const r = await c.execute<{ INDEX_NAME: string; UNIQUENESS: string }>(
+        `SELECT i.INDEX_NAME, i.UNIQUENESS, ic.COLUMN_NAME
+         FROM ALL_INDEXES i
+         LEFT JOIN ALL_IND_COLUMNS ic
+           ON ic.INDEX_OWNER = i.OWNER AND ic.INDEX_NAME = i.INDEX_NAME
+         WHERE i.TABLE_OWNER = :owner AND ROWNUM <= 1`,
+        { owner: 'GASBASE' }
+      );
+      return r.rows ?? [];
+    });
+    console.log('[集成] index join 样本:', rows[0]);
+    expect(Array.isArray(rows)).toBe(true);
+  });
 });
 
 /** 读取当前会话 schema，兼容多种 DM8 语法。 */
