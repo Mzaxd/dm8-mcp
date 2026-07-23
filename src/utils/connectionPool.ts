@@ -4,6 +4,10 @@ import type { Pool, PoolAttributes } from 'dmdb';
 import { getConnectionByName } from '../config.js';
 
 dmdb.outFormat = dmdb.OUT_FORMAT_OBJECT;
+// CLOB 列默认以 Lob 流对象返回，其内部含 BigInt 等不可 JSON 序列化的属性，
+// 导致 structuredContent 序列化（MCP 返回）抛错/挂起——SELECT * 含 CLOB 查询卡死的根因。
+// fetchAsString 让 CLOB 直接以 String 返回，绕开 Lob 流。实测：91ms 秒回，序列化正常。
+dmdb.fetchAsString = [dmdb.CLOB];
 
 /**
  * 连接池统计信息

@@ -13,6 +13,28 @@ import { assertReadOnlyQuery } from '../utils/validation.js';
 const DEFAULT_MAX_ROWS = Number(process.env.DM_MAX_ROWS) || 1000;
 const CONTENT_PREVIEW_ROWS = Number(process.env.DM_CONTENT_PREVIEW_ROWS) || 50;
 
+// ponytail: 全局 fetchAsString 已把 CLOB 转 string，但 BLOB/大整数等仍可能返回
+// 不可 JSON 序列化的值（Lob 流对象含 BigInt 属性、BigInt 本身），导致 MCP
+// structuredContent 序列化抛错/挂起。数据出口兜底安全化。升级路径：需保留 BLOB 原始字节则改 fetchAsBuffer + Base64。
+function safeRow(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(row)) {
+    if (typeof v === 'bigint') {
+      out[k] = v.toString();
+    } else if (
+      v !== null &&
+      typeof v === 'object' &&
+      typeof (v as { on?: unknown }).on === 'function'
+    ) {
+      // 残留 Lob 流（BLOB 等，fetchAsString 未覆盖）——序列化会卡，用占位
+      out[k] = '[LOB]';
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
 const executeQueryInputSchema = {
   query: z.string().min(1, 'query 不能为空').describe('只读 SQL 语句'),
   connection: z
@@ -59,7 +81,7 @@ export function registerExecuteQueryTool(server: McpServer): void {
           return dbConnection.execute<Record<string, unknown>>(effectiveQuery);
         });
 
-        const allRows = result.rows ?? [];
+        const allRows = (result.rows ?? []).map(safeRow);
         const truncated = allRows.length > rowLimit;
         // 截断到 maxRows，防止响应过大
         const rows = truncated ? allRows.slice(0, rowLimit) : allRows;
