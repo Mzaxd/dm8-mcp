@@ -103,10 +103,11 @@ Cline、mcp-router 等客户端的配置格式与 Claude Desktop 一致，均为
 |--------|------|----------|----------|
 | `list_schemas` | 列出已配置的连接、Schema 及数据库中可见的模式 | 无 | 无 |
 | `list_tables` | 列出指定 Schema 下的所有表 | 无 | `connection`, `schema` |
-| `describe_table` | 返回表的列名、类型、长度、是否可空 | `table` | `connection`, `schema` |
-| `execute_query` | 执行只读 SQL（SELECT/SHOW/DESCRIBE/EXPLAIN） | `query` | `connection`, `schema` |
+| `describe_table` | 返回表的列名、类型、长度、是否可空、列注释 | `table` | `connection`, `schema` |
+| `list_indexes` | 返回表的索引名、唯一性、索引列（ALL_INDEXES + ALL_IND_COLUMNS） | `table` | `connection`, `schema` |
+| `execute_query` | 执行只读 SQL（SELECT/SHOW/DESCRIBE/EXPLAIN） | `query` | `connection`, `schema`, `maxRows` |
 
-> **安全限制**: `execute_query` 仅允许 SELECT、SHOW、DESCRIBE、EXPLAIN 语句。
+> **安全限制**: `execute_query` 仅允许 SELECT、SHOW、DESCRIBE、EXPLAIN 语句。详见 [安全特性](#安全特性) 与 [docs/SECURITY.md](docs/SECURITY.md)。
 
 所有工具均返回 `content`（文本）和 `structuredContent`（JSON）两种格式。
 
@@ -149,6 +150,38 @@ list_tables(schema: "HALL")
   [gasbase] GASBASE, INSPECTION, SYSDBA
   [hall] HALL, SYSDBA
 ```
+
+## Resources（表结构资源）
+
+表结构以 MCP resource 暴露，client 可 `resources/list` 枚举、`resources/read` 按需读取，让 LLM 用 `@dm8:///.../表名` 直接引用表结构，避免每次 list→describe 三轮往返：
+
+- **URI 模板**：`dm8:///{connection}/{schema}/{table}`
+- **返回**：列定义与列注释（同 `describe_table`）
+- **枚举**：列出所有已配置连接/schema 下的表
+
+```
+dm8:///gasbase/GASBASE/USERS
+dm8:///hall/HALL/ORDER
+```
+
+## Prompts（查询模板）
+
+预定义的、带参数的指令模板，把 DB 探查最佳实践固化下来，减少 LLM 乱试：
+
+| Prompt | 参数 | 用途 |
+|--------|------|------|
+| `explore-schema` | `connection?`, `schema?` | 系统化探查 schema：列表 → 描述 → 索引 |
+| `analyze-table` | `table`, `connection?`, `schema?` | 单表结构 + 索引 + 数据分布的只读分析 |
+
+## 查询日志（logging）
+
+`execute_query` 每次调用通过 MCP logging 上报（client 订阅后可见）：
+
+- `info`：正常查询（query / 连接 / 耗时 / 行数 / 是否截断）
+- `warning`：耗时超过 `DM_SLOW_QUERY_MS`（默认 1000ms）的慢查询
+- `error`：执行失败
+
+未订阅 logging 的 client 静默忽略，不影响查询返回。
 
 ## 配置文件格式
 
@@ -320,17 +353,25 @@ npx mcp-dm8-server --connections '[{"name":"gasbase","host":"11.14.2.1","port":"
 | `--schemas` | `DM_SCHEMAS` | - | Schema 列表（JSON 或逗号分隔） |
 | `--connections` | `DM_CONNECTIONS` | - | 多连接配置（JSON 数组） |
 | `--default-connection` | `DM_DEFAULT_CONNECTION` | - | 默认连接名 |
+| - | `DM_MAX_ROWS` | `1000` | `execute_query` 默认最大返回行数 |
+| - | `DM_QUERY_TIMEOUT_MS` | `0`（不限） | 连接级查询超时（dmdb `socketTimeout`），防慢查询 |
+| - | `DM_SLOW_QUERY_MS` | `1000` | 慢查询阈值，超出则 logging 上报 `warning` |
+| - | `DM_POOL_MAX` / `DM_POOL_MIN` / `DM_POOL_TIMEOUT` | `5` / `1` / `60` | 连接池大小与闲置超时 |
 | `--version` | - | - | 打印版本信息 |
 
 配置优先级（高→低）：CLI 参数 → 环境变量 → 配置文件。
 
 ## 安全特性
 
+> 详见 [docs/SECURITY.md](docs/SECURITY.md)，包含对照 Datadog 披露的官方 Postgres MCP 只读绕过漏洞（多语句 `COMMIT;` + 会话污染 `SET`）的自查，以及部署侧纵深防御要求。
+
 - **SQL 注入防护**: 标识符格式校验 (`/^[A-Za-z_][A-Za-z0-9_]*$/`)，参数化查询
-- **只读强制**: 仅允许 SELECT / SHOW / DESCRIBE / EXPLAIN
+- **只读强制**: 仅允许 SELECT / SHOW / DESCRIBE / EXPLAIN；分号多语句拦截
 - **Schema 白名单**: `validateSchemaAccess()` 校验访问范围
 - **凭据保护**: 连接字符串中密码 URL 编码；配置文件被 `.gitignore` 忽略
 - **连接池管理**: `SELECT 1 FROM DUAL` 心跳检测，失效自动重建
+- **查询超时**: `DM_QUERY_TIMEOUT_MS` 连接级 socketTimeout，防慢查询拖垮连接池
+- **DB 账号最小权限**: 部署侧应给 MCP 账号仅 `GRANT SELECT`（纵深防御，最后一道闸）
 
 ## 开发
 
