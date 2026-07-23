@@ -1,8 +1,16 @@
+import path from 'node:path';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 describe('multi-connection config resolution', () => {
   beforeEach(() => {
     vi.resetModules();
+    // 隔离本地 .claude/dm8-mcp.json：否则 getDefaultConnectionFromConfigFile
+    // 会读到真实配置文件的 defaultConnection，覆盖 setConfig 设的连接。
+    process.env.DM_CONFIG_FILE = path.join(
+      process.cwd(),
+      'nonexistent-config-for-test.json'
+    );
   });
 
   it('uses the configured default connection when no parameters are provided', async () => {
