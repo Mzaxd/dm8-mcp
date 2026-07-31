@@ -206,31 +206,6 @@ describe('config file loading', () => {
     expect(conn!.masterPort).toBe('5237');
   });
 
-  it('reads defaultConnection from environment config', async () => {
-    writeConfigFile(tmpDir, {
-      activeEnv: 'prod',
-      environments: {
-        prod: {
-          defaultConnection: 'HALL',
-          connections: [
-            { name: 'BASE', host: 'h1', port: 5236, username: 'u', password: 'p', schema: 'BASE' },
-            { name: 'HALL', host: 'h2', port: 5236, username: 'u', password: 'p', schema: 'HALL' },
-          ],
-        },
-      },
-    });
-
-    process.chdir(tmpDir);
-    delete process.env.DM_CONNECTIONS;
-    delete process.env.DM_HOST;
-    delete process.env.DM_CONFIG_FILE;
-
-    const { getDefaultConnectionName, resetConfigCache } = await import('../src/config.js');
-    resetConfigCache();
-
-    expect(getDefaultConnectionName()).toBe('HALL');
-  });
-
   it('loads config from explicit --config path', async () => {
     const customDir = path.join(tmpDir, 'custom');
     fs.mkdirSync(customDir, { recursive: true });

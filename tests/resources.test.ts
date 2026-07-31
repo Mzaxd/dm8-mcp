@@ -49,7 +49,6 @@ vi.mock('../src/config.js', () => ({
     },
   ],
   getConfiguredSchemas: () => [{ name: 'SCOTT' }],
-  getDefaultConnectionName: () => 'default',
 }));
 
 import { registerTableResource } from '../src/resources/tableResource.js';

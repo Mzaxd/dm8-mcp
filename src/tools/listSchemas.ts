@@ -1,11 +1,11 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
-import {
-  getConfiguredConnections,
-  getConfiguredSchemas,
-  getDefaultConnectionName,
-} from '../config.js';
+import { getConfiguredConnections, getConfiguredSchemas } from '../config.js';
 import { withDmConnection } from '../utils/db.js';
+import {
+  describeConnection,
+  getAllowedSchemasForConnection,
+} from '../utils/targetResolver.js';
 
 const listSchemasInputSchema = {};
 
@@ -14,14 +14,14 @@ export function registerListSchemasTool(server: McpServer): void {
     'list_schemas',
     {
       title: '列出可访问的数据库模式',
-      description: '返回配置的模式列表和数据库中可访问的模式',
+      description:
+        '返回以连接为第一公民的目录：每个连接可访问的 schema、跨连接同名 schema 警告、以及数据库中实际可见的 schema。多连接模式下据此选择 connection 参数。',
       inputSchema: listSchemasInputSchema,
     },
     async () => {
       try {
         const configuredConnections = getConfiguredConnections();
         const configuredSchemas = getConfiguredSchemas();
-        const defaultConnectionName = getDefaultConnectionName();
 
         const dbSchemasByConnection: Record<string, string[]> = {};
         for (const configuredConnection of configuredConnections) {
@@ -50,36 +50,50 @@ export function registerListSchemasTool(server: McpServer): void {
           }
         }
 
-        // 构建输出
+        // 反向索引 schema 名 → 拥有它的连接名列表。同名 schema 出现在多个连接是
+        // 跨连接查错的主要源头（如 CUSTOMER 在 dev-GAS 与 prod-CUSTOMER 都有），
+        // 显式警告让 LLM 注意：这类 schema 必须显式传 connection，否则 resolver 报错。
+        const schemaToConnections = new Map<string, string[]>();
+        for (const connection of configuredConnections) {
+          for (const schema of getAllowedSchemasForConnection(connection)) {
+            const owners = schemaToConnections.get(schema) ?? [];
+            owners.push(connection.name);
+            schemaToConnections.set(schema, owners);
+          }
+        }
+        const ambiguousSchemas: Record<string, string[]> = {};
+        for (const [schema, owners] of schemaToConnections) {
+          if (owners.length > 1) {
+            ambiguousSchemas[schema] = owners;
+          }
+        }
+
         const lines: string[] = [];
 
         if (configuredConnections.length > 0) {
-          lines.push('=== 已配置的连接 ===');
+          lines.push('=== 可用连接（调用工具时用 connection 参数指定）===');
           for (const connection of configuredConnections) {
-            const isDefault = connection.name === defaultConnectionName;
-            lines.push(
-              `  ${connection.name}${isDefault ? ' (默认连接)' : ''} -> ${connection.schema}`
-            );
-            for (const schema of connection.schemas ?? []) {
-              const schemaDesc = schema.description ? ` - ${schema.description}` : '';
-              lines.push(`    - ${schema.name}${schemaDesc}`);
-            }
+            lines.push(`  ${describeConnection(connection)}`);
           }
           lines.push('');
         }
 
-        if (configuredSchemas.length > 0) {
-          lines.push('=== 已配置的 Schema 汇总 ===');
-          for (const schema of configuredSchemas) {
-            const desc = schema.description ? ` - ${schema.description}` : '';
-            lines.push(`  ${schema.name}${desc}`);
+        const ambiguousEntries = Object.entries(ambiguousSchemas);
+        if (ambiguousEntries.length > 0) {
+          lines.push('⚠ 同名 schema 跨多连接（必须显式传 connection，否则报错）：');
+          for (const [schema, owners] of ambiguousEntries) {
+            lines.push(`  ${schema} → ${owners.join(', ')}`);
           }
           lines.push('');
         }
 
-        lines.push('=== 数据库中可见的模式 ===');
-        for (const [connectionName, dbSchemas] of Object.entries(dbSchemasByConnection)) {
-          lines.push(`  [${connectionName}] ${dbSchemas.join(', ') || '无可见模式或查询失败'}`);
+        lines.push('=== 数据库中可见的 schema ===');
+        for (const [connectionName, dbSchemas] of Object.entries(
+          dbSchemasByConnection
+        )) {
+          lines.push(
+            `  [${connectionName}] ${dbSchemas.join(', ') || '无可见模式或查询失败'}`
+          );
         }
 
         return {
@@ -90,10 +104,15 @@ export function registerListSchemasTool(server: McpServer): void {
             },
           ],
           structuredContent: {
-            configuredConnections,
+            // 剔除 password：连接目录经 MCP 暴露给 client/LLM，凭据绝不外泄
+            configuredConnections: configuredConnections.map((connection) => {
+              const { password: _password, ...rest } = connection;
+              void _password;
+              return rest;
+            }),
             configuredSchemas,
             dbSchemasByConnection,
-            defaultConnectionName,
+            ambiguousSchemas,
           },
         };
       } catch (error) {

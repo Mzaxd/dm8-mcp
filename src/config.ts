@@ -20,14 +20,15 @@ export interface ConnectionConfig {
   password: string;
   schema: string;
   schemas?: SchemaConfig[];
-  default?: boolean;
+  /** 连接的语义说明，如「开发环境」「生产环境，慎用」。供 list_schemas 与错误引导文案展示，
+   *  帮助 LLM 在多连接下区分 dev/uat/prod，避免靠名字裸猜（根因：跨环境对比时同名 schema 查错库）。 */
+  description?: string;
   masterHost?: string;
   masterPort?: string;
 }
 
 export interface EnvironmentConfig {
   connections: ConnectionConfig[];
-  defaultConnection?: string;
 }
 
 export interface McpConfigFile {
@@ -43,7 +44,6 @@ export interface DMConfig {
   schema: string;
   schemas?: SchemaConfig[];
   connections?: ConnectionConfig[];
-  defaultConnection?: string;
   configFile?: string;
   env?: string;
 }
@@ -67,10 +67,6 @@ const argv = yargs(hideBin(process.argv))
   .option('connections', {
     type: 'string',
     describe: '多连接配置，必须为 JSON 数组',
-  })
-  .option('default-connection', {
-    type: 'string',
-    describe: '默认连接名，多连接模式下未显式传入 connection 时使用',
   })
   .option('config', {
     type: 'string',
@@ -177,6 +173,7 @@ function normalizeConnectionConfig(raw: unknown): ConnectionConfig {
 
   const masterHost = String(value.masterHost ?? '').trim() || undefined;
   const masterPort = String(value.masterPort ?? '').trim() || undefined;
+  const description = String(value.description ?? '').trim() || undefined;
 
   return {
     name: String(value.name ?? '').trim(),
@@ -186,10 +183,7 @@ function normalizeConnectionConfig(raw: unknown): ConnectionConfig {
     password: String(value.password ?? ''),
     schema: expanded.schema,
     schemas: expanded.schemas,
-    default:
-      typeof value.default === 'boolean'
-        ? value.default
-        : String(value.default ?? '').toLowerCase() === 'true',
+    ...(description && { description }),
     ...(masterHost && { masterHost }),
     ...(masterPort && { masterPort }),
   };
@@ -390,20 +384,6 @@ function getConnectionsFromConfigFile(): ConnectionConfig[] | undefined {
   return envConfig.connections.map((raw) => normalizeConnectionConfig(raw));
 }
 
-function getDefaultConnectionFromConfigFile(): string | undefined {
-  const configFile = loadConfigFile();
-  if (!configFile) {
-    return undefined;
-  }
-
-  const envName = resolveEnvName() ?? configFile.activeEnv;
-  if (!envName) {
-    return undefined;
-  }
-
-  return configFile.environments[envName]?.defaultConnection;
-}
-
 export function getConfig(): DMConfig {
   const config: DMConfig = {
     username: resolveValue('username', 'DM_USERNAME'),
@@ -411,11 +391,6 @@ export function getConfig(): DMConfig {
     host: resolveValue('host', 'DM_HOST'),
     port: resolveValue('port', 'DM_PORT'),
     schema: resolveValue('schema', 'DM_SCHEMA'),
-    defaultConnection:
-      (runtimeOverrides.defaultConnection as string | undefined) ??
-      (argv['default-connection'] as string | undefined) ??
-      process.env.DM_DEFAULT_CONNECTION ??
-      getDefaultConnectionFromConfigFile(),
     configFile: resolveConfigFilePath() ?? undefined,
     env: resolveEnvName(),
   };
@@ -465,17 +440,19 @@ export function getConfiguredConnections(): ConnectionConfig[] {
   } else if (!config.host && !config.username && !config.password && !config.schema) {
     result = [];
   } else {
+    // 单连接裸配：合成唯一连接，名字固定为 "default"。
+    // ponytail: 不再支持 defaultConnection 配置项——多连接下它只会让 LLM 静默查错库。
+    // 单连接场景下连接名无关紧要（LLM 无需传 connection），固定即可。
     result = [
       materializeConnection(
         {
-          name: config.defaultConnection || DEFAULT_CONNECTION_NAME,
+          name: DEFAULT_CONNECTION_NAME,
           host: config.host,
           port: config.port,
           username: config.username,
           password: config.password,
           schema: config.schema,
           schemas: config.schemas,
-          default: true,
         },
       ),
     ];
@@ -514,33 +491,6 @@ export function getConnectionByName(
   return getConfiguredConnections().find(
     (connection) => connection.name.toUpperCase() === normalized
   );
-}
-
-export function getDefaultConnectionName(): string | undefined {
-  const config = getConfig();
-  const connections = getConfiguredConnections();
-
-  if (connections.length === 0) {
-    return undefined;
-  }
-
-  if (config.defaultConnection) {
-    return config.defaultConnection;
-  }
-
-  const flagged = connections.find((connection) => connection.default);
-  if (flagged) {
-    return flagged.name;
-  }
-
-  if (connections.length === 1) {
-    return connections[0].name;
-  }
-
-  const namedDefault = connections.find(
-    (connection) => connection.name.toUpperCase() === DEFAULT_CONNECTION_NAME.toUpperCase()
-  );
-  return namedDefault?.name;
 }
 
 export function shouldShowVersion(): boolean {

@@ -6,6 +6,16 @@
 
 A TypeScript MCP (Model Context Protocol) server for Dameng DM8 database, providing schema browsing and read-only SQL query capabilities. Supports multi-connection, multi-schema, config file management, and master/fallback failover.
 
+## Upgrading from 1.x to 2.0
+
+2.0 is a **breaking change** release focused on fixing the long-standing issue of LLMs silently querying the wrong database in multi-connection, cross-schema scenarios (see [Changelog](CHANGELOG.md)).
+
+**Removed config options** (legacy values in old configs are silently ignored, but cleanup is recommended):
+- `defaultConnection` (environment-level) / `connection.default` (connection-level): a "default connection" lets the LLM silently query the wrong database between dev/prod, and has been removed.
+- CLI `--default-connection` / env var `DM_DEFAULT_CONNECTION`: same as above.
+
+**Migration**: in multi-connection mode, omitting `connection` no longer falls back to a default — it raises an error with a connection catalog (each connection's description, accessible schemas, and a correct call example). Have the LLM pass `connection` explicitly. Single-connection mode is unchanged.
+
 ## Quick Start
 
 ### Claude Code (Recommended)
@@ -26,8 +36,7 @@ Create two files in your project root — all config stays within the project:
           "port": 5236,
           "username": "SYSDBA",
           "password": "your_password",
-          "schema": "GASBASE",
-          "default": true
+          "schema": "GASBASE"
         }
       ]
     },
@@ -40,8 +49,7 @@ Create two files in your project root — all config stays within the project:
           "port": 5236,
           "username": "BASE",
           "password": "your_password",
-          "schema": "BASE",
-          "default": true
+          "schema": "BASE"
         }
       ]
     }
@@ -110,13 +118,15 @@ Cline, mcp-router, and other MCP clients use the same JSON `mcpServers` configur
 
 All tools return both `content` (text) and `structuredContent` (JSON) formats.
 
+> **`execute_query` metadata note**: `structuredContent` returns both `schema` (the "session schema" resolved by the resolver) and `queriedSchemas` (schemas actually touched by the SQL's `FROM`/`JOIN` clauses). When the SQL uses fully-qualified `SCHEMA.TABLE` for a cross-schema query, the two may differ (e.g. `schema=GASBASE` but `queriedSchemas=["CUSTOMER"]`), letting the LLM distinguish the connection's default schema from the SQL's real target.
+
 ### Usage Examples
 
 ```
 # View all connections and schemas
 list_schemas()
 
-# Query using the default connection
+# Single-connection setup: no need to pass connection (auto-selected)
 list_tables()
 describe_table(table: "USERS")
 execute_query(query: "SELECT COUNT(*) FROM ORDERS")
@@ -133,17 +143,12 @@ list_tables(schema: "HALL")
 ### list_schemas Output Example
 
 ```
-=== Configured Connections ===
-  gasbase (default) -> GASBASE [connection.default=true]
-    - GASBASE
-  hall -> HALL
-    - HALL - Hall Service
-    - HALL_REPORT - Hall Reports
+=== Available Connections (pass connection to select) ===
+  gasbase（schema: GASBASE）
+  hall — Hall Service（schema: HALL, HALL_REPORT）
 
-=== Configured Schemas ===
-  GASBASE
-  HALL - Hall Service
-  HALL_REPORT - Hall Reports
+⚠ Schema names spanning multiple connections (must pass connection explicitly):
+  GASBASE → gasbase, gasbase-report
 
 === DB-Visible Schemas ===
   [gasbase] GASBASE, INSPECTION, SYSDBA
@@ -159,7 +164,6 @@ list_tables(schema: "HALL")
   "activeEnv": "dev",
   "environments": {
     "dev": {
-      "defaultConnection": "gasbase",
       "connections": [
         {
           "name": "gasbase",
@@ -168,7 +172,7 @@ list_tables(schema: "HALL")
           "username": "GASBASE",
           "password": "password1",
           "schema": "GASBASE",
-          "default": true
+          "description": "Dev environment"
         }
       ]
     },
@@ -194,7 +198,7 @@ list_tables(schema: "HALL")
           "username": "BASE",
           "password": "password",
           "schema": "BASE",
-          "default": true
+          "description": "Production, use with caution"
         },
         {
           "name": "HALL",
@@ -241,8 +245,7 @@ When one account can access multiple schemas, you have two options:
   "port": 5236,
   "username": "HALL",
   "password": "your_password",
-  "schema": "HALL, HALL_REPORT, OTHER_SCHEMA",
-  "default": true
+  "schema": "HALL, HALL_REPORT, OTHER_SCHEMA"
 }
 ```
 
@@ -253,8 +256,12 @@ The first schema is used as the default; all are added to the access whitelist.
 When a tool call does not explicitly specify the `connection` parameter, routing follows this priority:
 
 1. `connection` specified → use that connection
-2. `schema` specified → match the unique connection owning that schema (error if multiple matches)
-3. Neither specified → use `defaultConnection` or the connection marked `default: true`
+2. `schema` specified → match the unique connection owning that schema (error listing candidates if multiple matches)
+3. Neither specified →
+   - Single connection configured: auto-selected
+   - Multiple connections configured: error with the connection catalog, requiring explicit `connection`
+
+> **Design note**: The legacy `defaultConnection` / `connection.default` options have been removed. A "default connection" lets the LLM silently query the wrong database when comparing dev/prod (especially with same-name schemas across connections), so selection is now explicit. Error responses list each connection's `description` (environment note) and accessible schemas with a correct call example.
 
 ### Master/Fallback Failover
 
@@ -282,7 +289,7 @@ Besides the config file, you can also pass connection info via CLI arguments or 
 npx mcp-dm8-server --host 127.0.0.1 --port 5236 --username SYSDBA --password your_password --schema SYSDBA
 
 # Multi-connection
-npx mcp-dm8-server --connections '[{"name":"gasbase","host":"11.14.2.1","port":"5236","username":"GASBASE","password":"pwd","schema":"GASBASE","default":true}]'
+npx mcp-dm8-server --connections '[{"name":"gasbase","host":"11.14.2.1","port":"5236","username":"GASBASE","password":"pwd","schema":"GASBASE","description":"Dev"}]'
 ```
 
 Or via environment variables:
@@ -319,7 +326,6 @@ Or via environment variables:
 | `--schema` | `DM_SCHEMA` | - | Default schema |
 | `--schemas` | `DM_SCHEMAS` | - | Schema list (JSON or comma-separated) |
 | `--connections` | `DM_CONNECTIONS` | - | Multi-connection config (JSON array) |
-| `--default-connection` | `DM_DEFAULT_CONNECTION` | - | Default connection name |
 | `--version` | - | - | Print version info |
 
 Config priority (high → low): CLI arguments → Environment variables → Config file.
@@ -329,7 +335,7 @@ Config priority (high → low): CLI arguments → Environment variables → Conf
 - **SQL Injection Prevention**: Identifier format validation (`/^[A-Za-z_][A-Za-z0-9_]*$/`), parameterized queries
 - **Read-Only Enforcement**: Only SELECT / SHOW / DESCRIBE / EXPLAIN allowed
 - **Schema Whitelist**: `validateSchemaAccess()` enforces access scope
-- **Credential Protection**: Passwords are URL-encoded in connection strings; config files are ignored by `.gitignore`
+- **Credential Protection**: Passwords are URL-encoded in connection strings; config files are ignored by `.gitignore`; the `list_schemas` connection catalog strips `password`, never exposing credentials to clients/LLMs
 - **Connection Pool Management**: Liveness check via `SELECT 1 FROM DUAL`, automatic reconnect on failure
 
 ## Development
