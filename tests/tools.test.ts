@@ -69,7 +69,6 @@ vi.mock('../src/config.js', () => ({
     },
   ],
   getConfiguredSchemas: () => [{ name: 'SCOTT' }],
-  getDefaultConnectionName: () => 'default',
 }));
 
 import { registerDescribeTableTool } from '../src/tools/describeTable.js';

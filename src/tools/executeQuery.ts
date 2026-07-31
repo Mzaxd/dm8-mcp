@@ -36,6 +36,25 @@ function safeRow(row: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
+/**
+ * 从 SQL 的 FROM/JOIN 子句提取 schema 限定的表所属 schema（大写去重）。
+ * 让 structuredContent.queriedSchemas 反映 SQL 实际触达的 schema，而非 resolver
+ * 解析的"会话 schema"——后者在未传 schema 且 SQL 用 SCHEMA.TABLE 全限定时会错位
+ * （effectiveSchema=GASBASE 但 SQL 查 CUSTOMER.xxx）。这样 LLM 能区分「连接默认 schema」
+ * 与「SQL 真实查询的 schema」，避免元数据污染。
+ * ponytail: 只解析 FROM/JOIN 后紧跟的 WORD.WORD，覆盖跨 schema JOIN（案例 B 那种）；
+ * 逗号分隔多表 FROM A.B, C.D 不识别——需要时再升级为 SQL parser。
+ */
+export function extractQueriedSchemas(query: string): string[] {
+  const schemas = new Set<string>();
+  const re = /(?:\bFROM|\bJOIN)\s+([A-Za-z_][\w]*)\s*\.\s*([A-Za-z_][\w]*)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(query)) !== null) {
+    schemas.add(match[1].toUpperCase());
+  }
+  return [...schemas];
+}
+
 /** 上报查询日志（best-effort）。client 未订阅 logging 时静默忽略。 */
 function logQuery(
   server: McpServer,
@@ -43,6 +62,7 @@ function logQuery(
     query: string;
     connectionName: string;
     schema: string;
+    queriedSchemas: string[];
     elapsedMs: number;
     rowCount: number;
     truncated: boolean;
@@ -100,6 +120,7 @@ export function registerExecuteQueryTool(server: McpServer): void {
         const target = resolveTargetConnection({ connection, schema });
 
         const effectiveQuery = isExplainStatement(query) ? rewriteExplain(query) : query;
+        const queriedSchemas = extractQueriedSchemas(effectiveQuery);
         const rowLimit = maxRows ?? DEFAULT_MAX_ROWS;
         const startedAt = Date.now();
 
@@ -138,6 +159,7 @@ export function registerExecuteQueryTool(server: McpServer): void {
           query,
           connectionName: target.connectionName,
           schema: target.schema,
+          queriedSchemas,
           elapsedMs: Date.now() - startedAt,
           rowCount: rows.length,
           truncated,
@@ -148,6 +170,7 @@ export function registerExecuteQueryTool(server: McpServer): void {
           structuredContent: {
             connection: target.connectionName,
             schema: target.schema,
+            queriedSchemas,
             columns,
             rows,
             // ponytail: 驱动层已按 maxRows+1 截断，truncated 时真实总行数未知；

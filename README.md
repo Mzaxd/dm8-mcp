@@ -6,6 +6,16 @@
 
 TypeScript 实现的达梦 DM8 Model Context Protocol (MCP) 服务器，提供表结构浏览和只读 SQL 查询能力。支持多连接、多 Schema、配置文件管理以及主备容灾。
 
+## 从 1.x 升级到 2.0
+
+2.0 是一个 **breaking change** 版本，针对多连接、跨 schema 场景下 LLM 容易查错库的问题做了重构（详见 [变更日志](CHANGELOG.md)）。
+
+**移除的配置项**（旧配置里写了会被静默忽略，建议清理）：
+- `defaultConnection`（环境级）/ `connection.default`（连接级）：多连接场景下「默认连接」会让 LLM 在 dev/prod 之间静默查错库，已移除。
+- CLI `--default-connection` / 环境变量 `DM_DEFAULT_CONNECTION`：同上。
+
+**迁移**：多连接模式下未传 `connection` 时不再回落到默认连接，而是报错并返回连接目录（含每个连接的环境说明、可访问 schema 与正确调用示例），请让 LLM 显式传 `connection`。单连接模式行为不变（自动选中唯一连接）。
+
 ## 快速开始
 
 ### Claude Code（推荐）
@@ -26,8 +36,7 @@ TypeScript 实现的达梦 DM8 Model Context Protocol (MCP) 服务器，提供�
           "port": 5236,
           "username": "SYSDBA",
           "password": "your_password",
-          "schema": "GASBASE",
-          "default": true
+          "schema": "GASBASE"
         }
       ]
     },
@@ -40,8 +49,7 @@ TypeScript 实现的达梦 DM8 Model Context Protocol (MCP) 服务器，提供�
           "port": 5236,
           "username": "BASE",
           "password": "your_password",
-          "schema": "BASE",
-          "default": true
+          "schema": "BASE"
         }
       ]
     }
@@ -111,13 +119,15 @@ Cline、mcp-router 等客户端的配置格式与 Claude Desktop 一致，均为
 
 所有工具均返回 `content`（文本）和 `structuredContent`（JSON）两种格式。
 
+> **`execute_query` 元数据提示**：`structuredContent` 同时返回 `schema`（resolver 解析的「会话 schema」）与 `queriedSchemas`（从 SQL 的 `FROM`/`JOIN` 子句解析出的实际触达 schema）。当 SQL 用 `SCHEMA.TABLE` 全限定跨 schema 查询时，两者可能不同（如 `schema=GASBASE` 但 `queriedSchemas=["CUSTOMER"]`），便于 LLM 区分「连接默认 schema」与「SQL 真实查询目标」。
+
 ### 使用示例
 
 ```
 # 查看所有连接和 Schema
 list_schemas()
 
-# 使用默认连接查询
+# 单连接配置下无需传 connection（自动选中唯一连接）
 list_tables()
 describe_table(table: "USERS")
 execute_query(query: "SELECT COUNT(*) FROM ORDERS")
@@ -134,22 +144,19 @@ list_tables(schema: "HALL")
 ### list_schemas 输出示例
 
 ```
-=== 已配置的连接 ===
-  gasbase (默认连接) -> GASBASE [connection.default=true]
-    - GASBASE
-  hall -> HALL
-    - HALL - 大厅服务
-    - HALL_REPORT - 大厅报表
+=== 可用连接（调用工具时用 connection 参数指定）===
+  gasbase（schema: GASBASE）
+  hall — 大厅服务（schema: HALL, HALL_REPORT）
 
-=== 已配置的 Schema 汇总 ===
-  GASBASE
-  HALL - 大厅服务
-  HALL_REPORT - 大厅报表
+⚠ 同名 schema 跨多连接（必须显式传 connection，否则报错）：
+  GASBASE → gasbase, gasbase-report
 
 === 数据库中可见的模式 ===
   [gasbase] GASBASE, INSPECTION, SYSDBA
   [hall] HALL, SYSDBA
 ```
+
+多连接模式下，未显式传 `connection` 时：仅配置单个连接会自动选中；配置多个连接则报错并返回上面的连接目录，由调用方显式选择（不再自动回落到某个「默认连接」）。每个连接可在配置里写 `description`（如「开发环境」「生产环境，慎用」）以便在目录与错误提示中区分。
 
 ## Resources（表结构资源）
 
@@ -192,7 +199,6 @@ dm8:///hall/HALL/ORDER
   "activeEnv": "dev",
   "environments": {
     "dev": {
-      "defaultConnection": "gasbase",
       "connections": [
         {
           "name": "gasbase",
@@ -201,7 +207,7 @@ dm8:///hall/HALL/ORDER
           "username": "GASBASE",
           "password": "password1",
           "schema": "GASBASE",
-          "default": true
+          "description": "开发环境"
         }
       ]
     },
@@ -227,7 +233,7 @@ dm8:///hall/HALL/ORDER
           "username": "BASE",
           "password": "password",
           "schema": "BASE",
-          "default": true
+          "description": "生产环境，慎用"
         },
         {
           "name": "HALL",
@@ -274,8 +280,7 @@ dm8:///hall/HALL/ORDER
   "port": 5236,
   "username": "HALL",
   "password": "your_password",
-  "schema": "HALL, HALL_REPORT, OTHER_SCHEMA",
-  "default": true
+  "schema": "HALL, HALL_REPORT, OTHER_SCHEMA"
 }
 ```
 
@@ -286,8 +291,12 @@ dm8:///hall/HALL/ORDER
 当工具调用未显式指定 `connection` 参数时，按以下优先级路由：
 
 1. 指定了 `connection` → 使用该连接
-2. 指定了 `schema` → 匹配唯一拥有该 Schema 的连接（多个匹配则报错）
-3. 均未指定 → 使用 `defaultConnection` 或标记为 `default: true` 的连接
+2. 指定了 `schema` → 匹配唯一拥有该 Schema 的连接（多个匹配则报错并列出候选）
+3. 均未指定 →
+   - 仅配置单个连接：自动选中
+   - 配置了多个连接：报错并返回连接目录，要求显式传 `connection`
+
+> **设计说明**：旧版的 `defaultConnection` / `connection.default` 配置项已移除。多连接场景下「默认连接」会让 LLM 在 dev/prod 之间静默查错库（同名 schema 跨连接时尤甚），因此改为强制显式选择。错误响应会列出每个连接的 `description`（环境说明）与可访问 schema，并给出正确调用示例，引导 LLM 一次选对。
 
 ### 主备容灾
 
@@ -315,7 +324,7 @@ dm8:///hall/HALL/ORDER
 npx mcp-dm8-server --host 127.0.0.1 --port 5236 --username SYSDBA --password 密码 --schema SYSDBA
 
 # 多连接
-npx mcp-dm8-server --connections '[{"name":"gasbase","host":"11.14.2.1","port":"5236","username":"GASBASE","password":"pwd","schema":"GASBASE","default":true}]'
+npx mcp-dm8-server --connections '[{"name":"gasbase","host":"11.14.2.1","port":"5236","username":"GASBASE","password":"pwd","schema":"GASBASE","description":"开发环境"}]'
 ```
 
 或通过环境变量：
@@ -352,7 +361,6 @@ npx mcp-dm8-server --connections '[{"name":"gasbase","host":"11.14.2.1","port":"
 | `--schema` | `DM_SCHEMA` | - | 默认 Schema |
 | `--schemas` | `DM_SCHEMAS` | - | Schema 列表（JSON 或逗号分隔） |
 | `--connections` | `DM_CONNECTIONS` | - | 多连接配置（JSON 数组） |
-| `--default-connection` | `DM_DEFAULT_CONNECTION` | - | 默认连接名 |
 | - | `DM_MAX_ROWS` | `1000` | `execute_query` 默认最大返回行数 |
 | - | `DM_QUERY_TIMEOUT_MS` | `0`（不限） | 连接级查询超时（dmdb `socketTimeout`），防慢查询 |
 | - | `DM_SLOW_QUERY_MS` | `1000` | 慢查询阈值，超出则 logging 上报 `warning` |
@@ -368,7 +376,7 @@ npx mcp-dm8-server --connections '[{"name":"gasbase","host":"11.14.2.1","port":"
 - **SQL 注入防护**: 标识符格式校验 (`/^[A-Za-z_][A-Za-z0-9_]*$/`)，参数化查询
 - **只读强制**: 仅允许 SELECT / SHOW / DESCRIBE / EXPLAIN；分号多语句拦截
 - **Schema 白名单**: `validateSchemaAccess()` 校验访问范围
-- **凭据保护**: 连接字符串中密码 URL 编码；配置文件被 `.gitignore` 忽略
+- **凭据保护**: 连接字符串中密码 URL 编码；配置文件被 `.gitignore` 忽略；`list_schemas` 返回的连接目录已剔除 `password`，绝不外泄给 client/LLM
 - **连接池管理**: `SELECT 1 FROM DUAL` 心跳检测，失效自动重建
 - **查询超时**: `DM_QUERY_TIMEOUT_MS` 连接级 socketTimeout，防慢查询拖垮连接池
 - **DB 账号最小权限**: 部署侧应给 MCP 账号仅 `GRANT SELECT`（纵深防御，最后一道闸）
