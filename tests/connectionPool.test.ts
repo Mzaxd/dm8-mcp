@@ -152,6 +152,30 @@ describe('ConnectionPool', () => {
     expect(attrs.connectString).not.toContain('socketTimeout');
     await connectionPool.closeAll();
   });
+
+  // 回归：dmdb dm.js parseUrl 用 url.parse(url).auth.split(":") 取凭据，
+  // 不 decode 且对含 ":" 的密码会截断。凭据必须走 query（url.parse(url,true) 标准 decode），
+  // 不能放 URL userInfo。否则密码里的 ":" 会触发 [-2501] 用户名或密码错误。
+  it('keeps credentials in query, not URL userInfo', async () => {
+    delete process.env.DM_QUERY_TIMEOUT_MS;
+    vi.resetModules();
+    const dmdbDefault = (await import('dmdb')).default as {
+      createPool: ReturnType<typeof vi.fn>;
+    };
+    dmdbDefault.createPool.mockResolvedValue({
+      close: vi.fn().mockResolvedValue(undefined),
+      connectionsOpen: 1,
+    });
+    const { connectionPool } = await import('../src/utils/connectionPool.js');
+    await connectionPool.getOrCreatePool('default', 'TEST_SCHEMA');
+    const attrs = dmdbDefault.createPool.mock.calls[0][0] as { connectString: string };
+    // 不走 userInfo：connectString 不含 "@"
+    expect(attrs.connectString).not.toContain('@');
+    // 凭据在 query，由 url.parse(url, true) 标准 decode
+    expect(attrs.connectString).toMatch(/[?&]user=testuser(&|$)/);
+    expect(attrs.connectString).toMatch(/[?&]password=testpass(&|$)/);
+    await connectionPool.closeAll();
+  });
 });
 
 describe('db module with connection pool', () => {
