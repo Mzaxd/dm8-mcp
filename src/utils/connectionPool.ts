@@ -97,17 +97,14 @@ class ConnectionPool {
       );
     }
 
-    const encodedUser = encodeURIComponent(username);
-    const encodedPassword = encodeURIComponent(password);
-
     // ponytail: dmdb 1.0.52452+ 的 createPool 无 poolAlias 守卫且默认别名 "default"，
     // 不传则所有池挤到同一别名，第二个池必报 [20006]。显式传唯一别名（= 缓存 key）。
     const poolAlias = this.buildConnectionKey(connectionName, schema);
 
     try {
       return await this.openPool(
-        encodedUser,
-        encodedPassword,
+        username,
+        password,
         host,
         port,
         schema,
@@ -121,8 +118,8 @@ class ConnectionPool {
         );
         try {
           return await this.openPool(
-            encodedUser,
-            encodedPassword,
+            username,
+            password,
             masterHost,
             effectiveMasterPort,
             schema,
@@ -137,20 +134,33 @@ class ConnectionPool {
   }
 
   private async openPool(
-    encodedUser: string,
-    encodedPassword: string,
+    username: string,
+    password: string,
     host: string,
     port: string,
     schema: string,
     poolAlias: string
   ): Promise<Pool> {
+    // user/password/schema/socketTimeout 全走 query 参数，不放 URL 的 userInfo。
+    // 根因：dmdb 1.0.52452 解析 connectString 时（dm.js parseUrl）用
+    //   url.parse(url).auth.split(":")
+    // 取 user/password——既不 decode percent-encoding（把 "%3A" 当字面字符发给服务端），
+    // 又在密码含 ":" 时被 split 截断。两条路都坏。
+    // 改走 query：url.parse(url, true) 的 query 解析会标准 decode，编码被正确还原。
+    // URLSearchParams 用 application/x-www-form-urlencoded 编码，dmdb 端用 querystring
+    // decode（含 "+" → 空格），编码/解码语义对齐，密码任意字符（":", "+", "#", "@"）均安全。
+    const params = new URLSearchParams();
+    // schema 置首：保持 connectString 以 "?schema=..." 开头（兼容既有断言与日志）
+    params.set('schema', schema);
+    params.set('user', username);
+    params.set('password', password);
     // socketTimeout 仅在配置 >0 时拼入连接串，避免改动默认行为
-    const query = QUERY_TIMEOUT_MS > 0
-      ? `?schema=${schema}&socketTimeout=${QUERY_TIMEOUT_MS}`
-      : `?schema=${schema}`;
+    if (QUERY_TIMEOUT_MS > 0) {
+      params.set('socketTimeout', String(QUERY_TIMEOUT_MS));
+    }
     const attributes: PoolAttributes = {
       // schema 走 query 参数：dmdb 解析后在新连接 openConnection 时自动 SET SCHEMA
-      connectString: `dm://${encodedUser}:${encodedPassword}@${host}:${port}${query}`,
+      connectString: `dm://${host}:${port}?${params.toString()}`,
       // 唯一别名，避免 dmdb 默认 "default" 别名挤兑（见 createPool 注释）
       poolAlias,
       poolMin: POOL_MIN,
