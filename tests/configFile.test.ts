@@ -20,10 +20,10 @@ describe('config file loading', () => {
     vi.clearAllMocks();
   });
 
-  function writeConfigFile(dir: string, config: Record<string, unknown>, fileName = 'dm8-mcp.json'): string {
+  function writeConfigFile(dir: string, config: Record<string, unknown>): string {
     const claudeDir = path.join(dir, '.claude');
     fs.mkdirSync(claudeDir, { recursive: true });
-    const filePath = path.join(claudeDir, fileName);
+    const filePath = path.join(claudeDir, 'dm8-mcp.json');
     fs.writeFileSync(filePath, JSON.stringify(config, null, 2), 'utf-8');
     return filePath;
   }
@@ -144,7 +144,7 @@ describe('config file loading', () => {
     setConfig({
       host: 'cli-host',
       username: 'cli-user',
-      password: 'cli-pass',
+      password: 'cli',
       schema: 'CLI_SCHEMA',
     });
 
